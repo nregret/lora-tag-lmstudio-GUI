@@ -7,10 +7,12 @@ import {
   Palette,
   Plus,
   Wand2,
+  Copy,
+  Download,
   X
 } from 'lucide-vue-next'
 import { ref, computed, watch } from 'vue'
-import { activeNodeIds, activeNodeTagContent, saveActiveNodeTags, batchInsertWord, isLocalApi, isGeneratingTags, generateTagsForActiveNodes } from '../store'
+import { activeNodeIds, activeNodeTagContent, saveActiveNodeTags, batchInsertWord, isLocalApi, isGeneratingTags, generateTagsForActiveNodes, nodes, currentDirectoryHandle } from '../store'
 
 // --- Active Tool ---
 const activeTool = ref(0)
@@ -30,6 +32,402 @@ const removeTag = (index: number) => {
   activeNodeTagContent.value = tags.join(', ')
   saveActiveNodeTags()
 }
+
+// --- Image Metadata (Panel 3) ---
+interface ImageMeta {
+  positive: string
+  negative: string
+  model: string
+  steps: string
+  cfg: string
+  sampler: string
+  seed: string
+  size: string
+  raw: string
+}
+
+const imageMeta = ref<ImageMeta | null>(null)
+const imageMetaChunks = ref<Record<string, string> | null>(null)
+const imageMetaBaseName = ref('')
+const isLoadingMeta = ref(false)
+const metaError = ref('')
+const metaActionMsg = ref('')
+
+function decodeUtf8OrLatin1(data: Uint8Array) {
+  const asUtf8 = new TextDecoder('utf-8', { fatal: false }).decode(data)
+  return asUtf8.includes('\uFFFD') ? new TextDecoder('latin1').decode(data) : asUtf8
+}
+
+async function inflateZlib(data: Uint8Array): Promise<Uint8Array> {
+  const DecompressionStreamCtor = (globalThis as any).DecompressionStream as
+    | undefined
+    | (new (format: string) => TransformStream<Uint8Array, Uint8Array>)
+
+  if (!DecompressionStreamCtor) {
+    throw new Error('当前环境不支持解压缩 PNG 压缩元数据（iTXt/zTXt），请使用较新的 Chromium 内核浏览器')
+  }
+
+  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStreamCtor('deflate'))
+  const ab = await new Response(stream).arrayBuffer()
+  return new Uint8Array(ab)
+}
+
+/** Read raw tEXt / zTXt / iTXt chunks from a PNG ArrayBuffer */
+async function readPngTextChunks(buf: ArrayBuffer): Promise<Record<string, string>> {
+  const view = new DataView(buf)
+  const PNG_SIG = [137, 80, 78, 71, 13, 10, 26, 10]
+  for (let i = 0; i < 8; i++) {
+    if (view.getUint8(i) !== PNG_SIG[i]) return {}
+  }
+  const dec = new TextDecoder('latin1')
+  const decUtf8 = new TextDecoder('utf-8')
+  const result: Record<string, string> = {}
+  let offset = 8
+  while (offset + 12 <= buf.byteLength) {
+    const len = view.getUint32(offset)
+    const type = dec.decode(new Uint8Array(buf, offset + 4, 4))
+    if (type === 'IEND') break
+    if (type === 'tEXt' && len > 0) {
+      const data = new Uint8Array(buf, offset + 8, len)
+      const nil = data.indexOf(0)
+      if (nil !== -1) {
+        const key = dec.decode(data.slice(0, nil))
+        const val = dec.decode(data.slice(nil + 1))
+        result[key] = val
+      }
+    } else if (type === 'zTXt' && len > 0) {
+      const data = new Uint8Array(buf, offset + 8, len)
+      const nil = data.indexOf(0)
+      if (nil !== -1 && nil + 2 <= data.length) {
+        const key = dec.decode(data.slice(0, nil))
+        const comprMethod = data[nil + 1]
+        const payload = data.slice(nil + 2)
+        if (comprMethod === 0) {
+          const inflated = await inflateZlib(payload)
+          result[key] = decodeUtf8OrLatin1(inflated)
+        }
+      }
+    } else if (type === 'iTXt' && len > 0) {
+      const data = new Uint8Array(buf, offset + 8, len)
+      let pos = 0
+      const nil0 = data.indexOf(0, pos)
+      if (nil0 !== -1) {
+        const key = dec.decode(data.slice(pos, nil0))
+        pos = nil0 + 1
+        const comprFlag = data[pos++]
+        const comprMethod = data[pos++]
+        const nil1 = data.indexOf(0, pos)
+        if (nil1 === -1) { offset += 12 + len; continue }
+        pos = nil1 + 1 // lang tag
+        const nil2 = data.indexOf(0, pos)
+        if (nil2 === -1) { offset += 12 + len; continue }
+        pos = nil2 + 1 // translated kw
+        const payload = data.slice(pos)
+        if (comprFlag === 0) {
+          result[key] = decUtf8.decode(payload)
+        } else if (comprFlag === 1 && comprMethod === 0) {
+          const inflated = await inflateZlib(payload)
+          result[key] = decUtf8.decode(inflated)
+        }
+      }
+    }
+    offset += 12 + len
+  }
+  return result
+}
+
+/** Parse A1111 / NovelAI "parameters" text into structured fields */
+function parseA1111(raw: string): ImageMeta {
+  const lines = raw.split('\n')
+  let posLines: string[] = []
+  let negLines: string[] = []
+  let paramLine = ''
+  let inNeg = false
+
+  for (const line of lines) {
+    if (line.startsWith('Negative prompt:')) {
+      inNeg = true
+      negLines.push(line.replace('Negative prompt:', '').trim())
+    } else if (/^Steps:\s*\d/.test(line)) {
+      paramLine = line
+      inNeg = false
+    } else if (inNeg) {
+      negLines.push(line)
+    } else {
+      posLines.push(line)
+    }
+  }
+
+  const params: Record<string, string> = {}
+  for (const part of paramLine.split(',')) {
+    const idx = part.indexOf(':')
+    if (idx !== -1) {
+      params[part.slice(0, idx).trim()] = part.slice(idx + 1).trim()
+    }
+  }
+
+  return {
+    positive: posLines.join('\n').trim(),
+    negative: negLines.join('\n').trim(),
+    model: params['Model'] || '',
+    steps: params['Steps'] || '',
+    cfg: params['CFG scale'] || '',
+    sampler: params['Sampler'] || '',
+    seed: params['Seed'] || '',
+    size: params['Size'] || '',
+    raw
+  }
+}
+
+type ComfyPromptNode = {
+  class_type?: string
+  inputs?: Record<string, any>
+}
+
+type ComfyPrompt = Record<string, ComfyPromptNode>
+
+function parseComfyUI(chunks: Record<string, string>): ImageMeta | null {
+  const rawPrompt = chunks['prompt']
+  const rawWorkflow = chunks['workflow']
+
+  if (rawPrompt) {
+    try {
+      const parsed = JSON.parse(rawPrompt) as unknown
+      if (!parsed || typeof parsed !== 'object') throw new Error('prompt 不是对象')
+
+      const prompt = parsed as ComfyPrompt
+
+      const entries = Object.entries(prompt).filter(
+        ([, node]) => node && typeof node === 'object' && typeof node.class_type === 'string'
+      )
+
+      const samplerEntry =
+        entries.find(([, n]) => (n.class_type || '').startsWith('KSampler')) ||
+        entries.find(([, n]) => (n.class_type || '').includes('Sampler'))
+
+      const samplerInputs = samplerEntry?.[1]?.inputs || {}
+
+      const readLinkedText = (refVal: any) => {
+        if (!Array.isArray(refVal) || refVal.length < 1) return ''
+        const nodeId = String(refVal[0])
+        const node = prompt[nodeId]
+        const text = node?.inputs?.text
+        return typeof text === 'string' ? text : ''
+      }
+
+      const positive = readLinkedText(samplerInputs.positive)
+      const negative = readLinkedText(samplerInputs.negative)
+
+      const seed =
+        typeof samplerInputs.seed === 'number' || typeof samplerInputs.seed === 'string' ? String(samplerInputs.seed) : ''
+      const steps =
+        typeof samplerInputs.steps === 'number' || typeof samplerInputs.steps === 'string' ? String(samplerInputs.steps) : ''
+      const cfg =
+        typeof samplerInputs.cfg === 'number' || typeof samplerInputs.cfg === 'string' ? String(samplerInputs.cfg) : ''
+
+      const samplerName = typeof samplerInputs.sampler_name === 'string' ? samplerInputs.sampler_name : ''
+      const scheduler = typeof samplerInputs.scheduler === 'string' ? samplerInputs.scheduler : ''
+      const sampler = samplerName ? (scheduler ? `${samplerName} / ${scheduler}` : samplerName) : scheduler
+
+      let model = ''
+      for (const [, node] of entries) {
+        const ckpt = node?.inputs?.ckpt_name
+        if (typeof ckpt === 'string' && ckpt) { model = ckpt; break }
+      }
+
+      let width = ''
+      let height = ''
+      for (const [, node] of entries) {
+        const w = node?.inputs?.width
+        const h = node?.inputs?.height
+        if ((typeof w === 'number' || typeof w === 'string') && (typeof h === 'number' || typeof h === 'string')) {
+          width = String(w)
+          height = String(h)
+          break
+        }
+      }
+      const size = width && height ? `${width}x${height}` : ''
+
+      return {
+        positive,
+        negative,
+        model,
+        steps,
+        cfg,
+        sampler,
+        seed,
+        size,
+        raw: rawPrompt
+      }
+    } catch {
+      // fall through to workflow
+    }
+  }
+
+  if (rawWorkflow) {
+    return {
+      positive: '',
+      negative: '',
+      model: '',
+      steps: '',
+      cfg: '',
+      sampler: '',
+      seed: '',
+      size: '',
+      raw: rawWorkflow
+    }
+  }
+
+  return null
+}
+
+async function copyRawMetadata() {
+  metaActionMsg.value = ''
+  const raw = imageMeta.value?.raw || ''
+  if (!raw) return
+  try {
+    await navigator.clipboard.writeText(raw)
+    metaActionMsg.value = '已复制'
+    setTimeout(() => (metaActionMsg.value = ''), 1200)
+  } catch {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = raw
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      metaActionMsg.value = '已复制'
+      setTimeout(() => (metaActionMsg.value = ''), 1200)
+    } catch (e) {
+      metaActionMsg.value = '复制失败'
+      setTimeout(() => (metaActionMsg.value = ''), 1200)
+      throw e
+    }
+  }
+}
+
+async function exportMetadataJson() {
+  metaActionMsg.value = ''
+  if (!imageMetaChunks.value) return
+
+  const payload = {
+    baseName: imageMetaBaseName.value || undefined,
+    chunks: imageMetaChunks.value,
+    parsed: imageMeta.value,
+    exportedAt: new Date().toISOString()
+  }
+  const json = JSON.stringify(payload, null, 2)
+  const suggestedName = `${imageMetaBaseName.value || 'image'}.metadata.json`
+
+  const savePicker = (window as any).showSaveFilePicker as
+    | undefined
+    | ((opts: any) => Promise<any>)
+
+  try {
+    if (savePicker) {
+      const handle = await savePicker({
+        suggestedName,
+        types: [
+          {
+            description: 'JSON',
+            accept: { 'application/json': ['.json'] }
+          }
+        ]
+      })
+      const writable = await handle.createWritable()
+      await writable.write(json)
+      await writable.close()
+      metaActionMsg.value = '已导出'
+      setTimeout(() => (metaActionMsg.value = ''), 1200)
+      return
+    }
+
+    const blob = new Blob([json], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = suggestedName
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    metaActionMsg.value = '已导出'
+    setTimeout(() => (metaActionMsg.value = ''), 1200)
+  } catch (e) {
+    // User cancel is fine
+    const name = (e as any)?.name
+    if (name === 'AbortError') return
+    metaActionMsg.value = '导出失败'
+    setTimeout(() => (metaActionMsg.value = ''), 1200)
+    throw e
+  }
+}
+
+async function loadImageMetadata() {
+  imageMeta.value = null
+  imageMetaChunks.value = null
+  imageMetaBaseName.value = ''
+  metaError.value = ''
+  if (activeNodeIds.value.length !== 1 || !currentDirectoryHandle.value) return
+
+  const node = nodes.value.find(n => n.id === activeNodeIds.value[0])
+  if (!node) return
+  imageMetaBaseName.value = node.baseName
+
+  isLoadingMeta.value = true
+  try {
+    // Find the image file (try common extensions)
+    const exts = ['png', 'jpg', 'jpeg', 'webp', 'bmp']
+    let fileHandle: any = null
+    for (const ext of exts) {
+      try {
+        fileHandle = await currentDirectoryHandle.value.getFileHandle(`${node.baseName}.${ext}`)
+        break
+      } catch {}
+    }
+    if (!fileHandle) { metaError.value = '找不到原始图片文件'; return }
+
+    const file: File = await fileHandle.getFile()
+
+    // Only PNG has reliable text metadata
+    if (!file.name.toLowerCase().endsWith('.png')) {
+      metaError.value = '仅支持 PNG 格式的元数据解析'
+      return
+    }
+
+    const buf = await file.arrayBuffer()
+    const chunks = await readPngTextChunks(buf)
+    imageMetaChunks.value = chunks
+    const a1111Raw = chunks['parameters'] || chunks['Comment'] || chunks['Description'] || ''
+    if (a1111Raw) {
+      imageMeta.value = parseA1111(a1111Raw)
+      return
+    }
+
+    const comfyMeta = parseComfyUI(chunks)
+    if (comfyMeta) {
+      imageMeta.value = comfyMeta
+      return
+    }
+
+    const keys = Object.keys(chunks)
+    metaError.value = keys.length
+      ? `图片包含元数据，但未找到可识别字段（A1111 parameters 或 ComfyUI prompt/workflow）。现有字段：${keys.join(', ')}`
+      : '图片中未包含可识别的元数据'
+  } catch (e) {
+    metaError.value = '读取元数据失败: ' + (e as Error).message
+  } finally {
+    isLoadingMeta.value = false
+  }
+}
+
+// Load metadata whenever panel 3 is active and selection changes
+watch([activeTool, activeNodeIds], ([tool]) => {
+  if (tool === 2) loadImageMetadata()
+})
 
 const tagType = ref('tag') 
 const tagLength = ref('moderate') 
@@ -182,6 +580,105 @@ const generateTags = async () => {
               @input="saveActiveNodeTags"
               placeholder="逗号分隔的打标内容..."
             ></textarea>
+          </div>
+        </div>
+      </template>
+
+      <!-- ============ IMAGE METADATA PANEL ============ -->
+      <template v-else-if="activeTool === 2">
+        <div class="header">
+          <div class="title-row">
+            <div class="title-with-icon">
+              <ImageIcon :size="20" color="var(--primary)" />
+              <h2>图片信息</h2>
+            </div>
+            <div class="tag-count-badge" v-if="imageMeta">
+              {{ imageMeta.size || '—' }}
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="content-scroll">
+          <!-- Loading -->
+          <div v-if="isLoadingMeta" class="tag-empty-state">
+            <span class="loading-spinner"></span>
+            <span>读取中...</span>
+          </div>
+
+          <!-- No image selected -->
+          <div v-else-if="activeNodeIds.length === 0" class="tag-empty-state">
+            <ImageIcon :size="36" class="empty-icon" />
+            <span>请在画布上选择一张图片</span>
+          </div>
+
+          <!-- Multi-select -->
+          <div v-else-if="activeNodeIds.length > 1" class="tag-empty-state">
+            <ImageIcon :size="36" class="empty-icon" />
+            <span>已选中 <strong style="color: var(--primary);">{{ activeNodeIds.length }}</strong> 张图片</span>
+          </div>
+
+          <!-- Error -->
+          <div v-else-if="metaError" class="tag-empty-state">
+            <ImageIcon :size="36" class="empty-icon" />
+            <span class="meta-error">{{ metaError }}</span>
+          </div>
+
+          <!-- Metadata display -->
+          <div v-else-if="imageMeta" class="meta-panel">
+            <!-- Stat grid: model / steps / cfg / sampler / seed -->
+            <div class="meta-stat-grid">
+              <div class="meta-stat" v-if="imageMeta.model">
+                <span class="meta-stat-label">模型</span>
+                <span class="meta-stat-value">{{ imageMeta.model }}</span>
+              </div>
+              <div class="meta-stat" v-if="imageMeta.sampler">
+                <span class="meta-stat-label">采样器</span>
+                <span class="meta-stat-value">{{ imageMeta.sampler }}</span>
+              </div>
+              <div class="meta-stat" v-if="imageMeta.steps">
+                <span class="meta-stat-label">步数</span>
+                <span class="meta-stat-value">{{ imageMeta.steps }}</span>
+              </div>
+              <div class="meta-stat" v-if="imageMeta.cfg">
+                <span class="meta-stat-label">CFG</span>
+                <span class="meta-stat-value">{{ imageMeta.cfg }}</span>
+              </div>
+              <div class="meta-stat" v-if="imageMeta.seed">
+                <span class="meta-stat-label">Seed</span>
+                <span class="meta-stat-value meta-mono">{{ imageMeta.seed }}</span>
+              </div>
+            </div>
+
+            <!-- Positive prompt -->
+            <div class="meta-block" v-if="imageMeta.positive">
+              <div class="meta-block-label positive-label">正向提示词</div>
+              <div class="meta-block-content glass-inset">{{ imageMeta.positive }}</div>
+            </div>
+
+            <!-- Negative prompt -->
+            <div class="meta-block" v-if="imageMeta.negative">
+              <div class="meta-block-label negative-label">反向提示词</div>
+              <div class="meta-block-content glass-inset negative-content">{{ imageMeta.negative }}</div>
+            </div>
+
+            <!-- Raw metadata -->
+            <div class="meta-block" v-if="imageMeta.raw">
+              <div class="meta-block-label meta-block-label-row">
+                <span>原始元数据</span>
+                <span class="meta-actions">
+                  <span v-if="metaActionMsg" class="meta-action-msg">{{ metaActionMsg }}</span>
+                  <button class="meta-action-btn" type="button" title="复制到剪切板" @click="copyRawMetadata">
+                    <Copy :size="14" />
+                  </button>
+                  <button class="meta-action-btn" type="button" title="导出为 JSON" @click="exportMetadataJson">
+                    <Download :size="14" />
+                  </button>
+                </span>
+              </div>
+              <pre class="meta-block-content glass-inset meta-raw">{{ imageMeta.raw }}</pre>
+            </div>
           </div>
         </div>
       </template>
@@ -989,5 +1486,140 @@ textarea::placeholder {
   resize: none;
   height: 100%;
   width: 100%;
+}
+
+/* ====== Image Metadata Panel ====== */
+.meta-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding-bottom: 16px;
+}
+
+.meta-stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.meta-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid var(--glass-border-light);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+/* model / sampler spans full row */
+.meta-stat:first-child,
+.meta-stat:nth-child(2) {
+  grid-column: span 2;
+}
+
+.meta-stat-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-light);
+}
+
+.meta-stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  word-break: break-all;
+}
+
+.meta-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.meta-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.meta-block-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.meta-block-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.meta-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meta-action-msg {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-light);
+}
+
+.meta-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border-light);
+  background: rgba(255, 255, 255, 0.45);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.meta-action-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.positive-label {
+  color: #10b981;  /* green */
+}
+
+.negative-label {
+  color: #ef4444;  /* red */
+}
+
+.meta-block-content {
+  padding: 12px 14px;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.negative-content {
+  color: var(--text-muted);
+}
+
+.meta-raw {
+  max-height: 260px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.meta-error {
+  color: var(--danger);
+  font-size: 13px;
+  text-align: center;
 }
 </style>
