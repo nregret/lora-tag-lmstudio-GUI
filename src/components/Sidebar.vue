@@ -4,15 +4,18 @@ import {
   User, 
   Shirt, 
   Image as ImageIcon, 
-  Palette,
+  Bot,
+  Send,
+  Trash2,
   Plus,
   Wand2,
   Copy,
   Download,
   X
 } from 'lucide-vue-next'
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { activeNodeIds, activeNodeTagContent, saveActiveNodeTags, batchInsertWord, isLocalApi, isGeneratingTags, generateTagsForActiveNodes, nodes, currentDirectoryHandle } from '../store'
+import { blobToDataUrlScaled } from '../utils/image'
 
 // --- Active Tool ---
 const activeTool = ref(0)
@@ -52,6 +55,367 @@ const imageMetaBaseName = ref('')
 const isLoadingMeta = ref(false)
 const metaError = ref('')
 const metaActionMsg = ref('')
+
+// --- Chat Tool (Panel 4) ---
+type ChatRole = 'user' | 'assistant'
+type ChatRef = { nodeId: string; baseName: string; imageUrl: string }
+type ChatMessage = {
+  role: ChatRole
+  content: string
+  refs?: ChatRef[]
+  thinking?: boolean
+  ts: number
+}
+
+const LOCAL_CHAT_URL = 'http://127.0.0.1:1234/v1/chat/completions'
+const chatMessages = ref<ChatMessage[]>([])
+const chatInput = ref('')
+const isSendingChat = ref(false)
+const chatError = ref('')
+const chatScrollRef = ref<HTMLElement | null>(null)
+const chatInputRef = ref<HTMLTextAreaElement | null>(null)
+const chatRefs = ref<ChatRef[]>([])
+const mentionOpen = ref(false)
+const mentionQuery = ref('')
+const mentionAnchor = ref(-1)
+const mentionActiveIndex = ref(0)
+const chatStatusLabel = computed(() => (isLocalApi.value ? '本地' : '仅本地'))
+
+async function nodeImageUrlToDataUrl(imageUrl: string) {
+  const res = await fetch(imageUrl)
+  const blob = await res.blob()
+  return blobToDataUrlScaled(blob, { maxSide: 768, mime: 'image/jpeg', quality: 0.85 })
+}
+
+function updateMentionState() {
+  const el = chatInputRef.value
+  if (!el) return
+  const text = chatInput.value
+  const pos = el.selectionStart ?? text.length
+  const before = text.slice(0, pos)
+  const at = before.lastIndexOf('@')
+  if (at === -1) {
+    mentionOpen.value = false
+    mentionQuery.value = ''
+    mentionAnchor.value = -1
+    return
+  }
+  const prev = at > 0 ? before[at - 1] : ' '
+  if (prev && !/\s/.test(prev)) {
+    // avoid emails/words like a@b
+    mentionOpen.value = false
+    return
+  }
+  const q = before.slice(at + 1)
+  if (q.includes(' ') || q.includes('\n') || q.includes('\t')) {
+    mentionOpen.value = false
+    return
+  }
+  mentionOpen.value = true
+  mentionQuery.value = q
+  mentionAnchor.value = at
+  mentionActiveIndex.value = 0
+}
+
+function closeMentions() {
+  mentionOpen.value = false
+  mentionQuery.value = ''
+  mentionAnchor.value = -1
+  mentionActiveIndex.value = 0
+}
+
+const mentionCandidates = computed(() => {
+  const q = mentionQuery.value.trim().toLowerCase()
+  const imgs = nodes.value
+    .filter(n => typeof (n as any).imageUrl === 'string' && (n as any).imageUrl)
+    .map(n => ({ nodeId: String((n as any).id), baseName: String((n as any).baseName || ''), imageUrl: String((n as any).imageUrl) }))
+    .filter(n => n.baseName)
+
+  if (!q) return imgs.slice(0, 8)
+  return imgs.filter(n => n.baseName.toLowerCase().includes(q)).slice(0, 8)
+})
+
+function selectMention(idxOrNode: number | { nodeId: string; baseName: string; imageUrl: string }) {
+  const node =
+    typeof idxOrNode === 'number'
+      ? mentionCandidates.value[idxOrNode]
+      : idxOrNode
+
+  if (!node) return
+  if (!chatRefs.value.some(r => r.nodeId === node.nodeId)) chatRefs.value.push(node)
+
+  const el = chatInputRef.value
+  if (el && mentionAnchor.value !== -1) {
+    const pos = el.selectionStart ?? chatInput.value.length
+    const before = chatInput.value.slice(0, mentionAnchor.value)
+    const after = chatInput.value.slice(pos)
+    // We keep the reference as a chip; remove the "@query" text from input.
+    chatInput.value = before + after
+    nextTick(() => {
+      const caret = before.length
+      el.focus()
+      el.setSelectionRange(caret, caret)
+      updateMentionState()
+    })
+  }
+
+  closeMentions()
+}
+
+function removeRef(nodeId: string) {
+  chatRefs.value = chatRefs.value.filter(r => r.nodeId !== nodeId)
+}
+
+function clearRefs() {
+  chatRefs.value = []
+}
+
+function clearChat() {
+  chatMessages.value = []
+  chatInput.value = ''
+  clearRefs()
+  chatError.value = ''
+  closeMentions()
+}
+
+async function scrollChatToBottom() {
+  await nextTick()
+  const el = chatScrollRef.value
+  if (!el) return
+  el.scrollTop = el.scrollHeight
+}
+
+async function sendChat() {
+  chatError.value = ''
+  if (!isLocalApi.value) {
+    chatError.value = '当前仅实现本地端（请在设置里切换到“本地 API”）'
+    return
+  }
+  const text = chatInput.value.trim()
+  const hasRefs = chatRefs.value.length > 0
+  if (!text && !hasRefs) return
+  const refsSnapshot = chatRefs.value.slice()
+
+  chatMessages.value.push({
+    role: 'user',
+    content: text || (hasRefs ? '（引用了图片）' : ''),
+    refs: refsSnapshot.length ? refsSnapshot : undefined,
+    ts: Date.now()
+  })
+  await scrollChatToBottom()
+  clearRefs()
+  closeMentions()
+
+  isSendingChat.value = true
+  try {
+    const history = chatMessages.value.slice(-12).map(m => ({ role: m.role, content: m.content }))
+    const messages: any[] = [{ role: 'system', content: '你是一个简洁、可靠的助手。' }, ...history]
+
+    // If there are referenced images, always try to send them.
+    if (refsSnapshot.length) {
+      const last = messages[messages.length - 1]
+      const maxImages = 4
+      const refs = refsSnapshot.slice(0, maxImages)
+      const dataUrls: string[] = []
+      for (const r of refs) {
+        dataUrls.push(await nodeImageUrlToDataUrl(r.imageUrl))
+      }
+      const more = refsSnapshot.length > maxImages ? `（仅发送前 ${maxImages} 张引用图）\n` : ''
+      messages[messages.length - 1] = {
+        role: 'user',
+        content: [
+          { type: 'text', text: `${more}${last.content || '请结合图片回答：'}` },
+          ...dataUrls.map(url => ({ type: 'image_url', image_url: { url } }))
+        ]
+      }
+    }
+
+    const payload = {
+      model: 'local-model',
+      messages,
+      temperature: 0.7,
+      max_tokens: 800,
+      stream: true
+    }
+
+    const res = await fetch(LOCAL_CHAT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(payload)
+    })
+
+    if (!res.ok) {
+      let errText = ''
+      try { errText = JSON.stringify(await res.json()) } catch { errText = await res.text() }
+      throw new Error(errText || res.statusText)
+    }
+
+    const assistantMsg: ChatMessage = { role: 'assistant', content: '', ts: Date.now() }
+    if (isLocalApi.value) assistantMsg.thinking = true
+    chatMessages.value.push(assistantMsg)
+    await scrollChatToBottom()
+
+    const extractNonStreamText = (data: any) => {
+      const choice0 = data?.choices?.[0]
+      const content = choice0?.message?.content
+      if (typeof content === 'string') return content
+      if (Array.isArray(content)) {
+        return content
+          .map((b: any) => (typeof b?.text === 'string' ? b.text : typeof b?.content === 'string' ? b.content : ''))
+          .filter(Boolean)
+          .join('')
+      }
+      if (typeof choice0?.text === 'string') return choice0.text
+      if (typeof data?.output_text === 'string') return data.output_text
+      if (typeof data?.content === 'string') return data.content
+      return ''
+    }
+
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+    const typewriter = async (full: string) => {
+      assistantMsg.thinking = false
+      const chunkSize = 10
+      for (let i = 0; i < full.length; i += chunkSize) {
+        assistantMsg.content += full.slice(i, i + chunkSize)
+        await scrollChatToBottom()
+        await sleep(12)
+      }
+    }
+
+    const reader = res.body?.getReader()
+    if (!reader) {
+      // Fallback when body can't be streamed
+      const data = await res.json()
+      const answer = extractNonStreamText(data).trim()
+      if (answer) await typewriter(answer)
+      else assistantMsg.content = '（无内容）'
+      chatInput.value = ''
+      await scrollChatToBottom()
+      await nextTick()
+      chatInputRef.value?.focus()
+      return
+    }
+    const decoder = new TextDecoder('utf-8')
+    let buf = ''
+    let rawAll = ''
+    let receivedAnyPiece = false
+    let doneSeen = false
+
+    const extractPiece = (evt: any) => {
+      const choice0 = evt?.choices?.[0]
+      const delta = choice0?.delta
+      const piece =
+        (typeof delta?.content === 'string' && delta.content) ||
+        (typeof delta?.text === 'string' && delta.text) ||
+        (typeof choice0?.message?.content === 'string' && choice0.message.content) ||
+        // some servers stream "response" style
+        (typeof evt?.output_text === 'string' && evt.output_text) ||
+        ''
+      return piece
+    }
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      const chunkText = decoder.decode(value, { stream: true })
+      rawAll += chunkText
+      buf += chunkText
+      buf = buf.replace(/\r\n/g, '\n')
+
+      const lines = buf.split('\n')
+      buf = lines.pop() || ''
+      for (const rawLine of lines) {
+        const line = rawLine.trim()
+        if (!line) continue
+        if (line.startsWith(':')) continue // keep-alive
+        if (line.startsWith('event:')) continue
+
+        let payloadStr = ''
+        if (line.startsWith('data:')) {
+          payloadStr = line.slice(5).trim()
+          if (payloadStr === '[DONE]') { doneSeen = true; continue }
+        } else if (line.startsWith('{') || line.startsWith('[')) {
+          // NDJSON-style streaming (or mislabelled content-type)
+          payloadStr = line
+        } else {
+          continue
+        }
+
+        try {
+          const evt = JSON.parse(payloadStr)
+          const piece = extractPiece(evt)
+          if (piece) {
+            receivedAnyPiece = true
+            if (assistantMsg.thinking) assistantMsg.thinking = false
+            assistantMsg.content += piece
+          }
+        } catch {
+          // ignore malformed chunks
+        }
+      }
+      await scrollChatToBottom()
+    }
+
+    // Final fallback: if we got nothing, try parse whole body as JSON and "typewriter" it.
+    if (!receivedAnyPiece) {
+      const trimmed = rawAll.trim()
+      if (trimmed.startsWith('{')) {
+        try {
+          const data = JSON.parse(trimmed)
+          const answer = extractNonStreamText(data).trim()
+          if (answer) {
+            assistantMsg.content = ''
+            await typewriter(answer)
+            receivedAnyPiece = true
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    // Retry once with non-stream if streaming produced nothing (LM Studio sometimes buffers/mislabels)
+    if (!receivedAnyPiece) {
+      try {
+        const retryPayload = { ...payload, stream: false }
+        const retryRes = await fetch(LOCAL_CHAT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(retryPayload)
+        })
+        if (retryRes.ok) {
+          const data = await retryRes.json()
+          const answer = extractNonStreamText(data).trim()
+          if (answer) {
+            assistantMsg.content = ''
+            await typewriter(answer)
+            receivedAnyPiece = true
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    assistantMsg.thinking = false
+    assistantMsg.content = assistantMsg.content.trim() || '（无内容）'
+    chatInput.value = ''
+    await scrollChatToBottom()
+    await nextTick()
+    chatInputRef.value?.focus()
+  } catch (e) {
+    const msg = (e as Error).message || ''
+    if (/image|vision|multimodal|modalit|image_url|content.*array|unsupported/i.test(msg)) {
+      chatError.value = '当前模型不支持图片上传（请更换支持视觉的模型，或只发文字）'
+    } else {
+      chatError.value = '请求失败：' + msg
+    }
+  } finally {
+    isSendingChat.value = false
+    await nextTick()
+    chatInputRef.value?.focus()
+  }
+}
 
 function decodeUtf8OrLatin1(data: Uint8Array) {
   const asUtf8 = new TextDecoder('utf-8', { fatal: false }).decode(data)
@@ -683,6 +1047,114 @@ const generateTags = async () => {
         </div>
       </template>
 
+      <!-- ============ CHAT PANEL ============ -->
+      <template v-else-if="activeTool === 3">
+        <div class="header">
+          <div class="title-row">
+            <div class="title-with-icon">
+              <Bot :size="20" color="var(--primary)" />
+              <h2>AI 对话</h2>
+            </div>
+            <div class="tag-count-badge">
+              {{ chatStatusLabel }}
+            </div>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="content-scroll chat-scroll" ref="chatScrollRef">
+          <div v-if="chatMessages.length === 0" class="tag-empty-state">
+            <Bot :size="36" class="empty-icon" />
+            <span>连接到本地模型（LM Studio / OpenAI 兼容接口）</span>
+            <span style="font-size: 12px; color: var(--text-light); margin-top: 6px;">
+              端口：127.0.0.1:1234（仅本地 API）
+            </span>
+          </div>
+
+          <div v-else class="chat-list">
+            <div v-for="m in chatMessages" :key="m.ts + '-' + m.role" class="chat-msg" :class="m.role">
+              <div class="chat-bubble glass-card">
+                <div class="chat-text">{{ m.content }}</div>
+                <div v-if="m.role === 'assistant' && m.thinking && !m.content" class="chat-thinking" aria-label="thinking">
+                  <span class="thinking-dot"></span>
+                  <span class="thinking-dot"></span>
+                  <span class="thinking-dot"></span>
+                </div>
+                <div v-if="m.refs && m.refs.length" class="chat-msg-refs">
+                  <span v-for="r in m.refs" :key="r.nodeId" class="chat-msg-ref" :title="r.baseName">
+                    <img :src="r.imageUrl" class="chat-msg-ref-img" />
+                    <span class="chat-msg-ref-name">{{ r.baseName }}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions-area chat-actions">
+          <div class="chat-top-actions">
+            <button class="meta-action-btn" type="button" title="清空对话" @click="clearChat">
+              <Trash2 :size="14" />
+            </button>
+          </div>
+
+          <div v-if="chatError" class="chat-error">{{ chatError }}</div>
+
+          <div class="chat-composer glass-inset">
+            <div v-if="chatRefs.length" class="chat-chip-row">
+              <span v-for="r in chatRefs" :key="r.nodeId" class="chat-chip glass-card" :title="r.baseName">
+                <img :src="r.imageUrl" class="chat-chip-img" />
+                <span class="chat-chip-name">{{ r.baseName }}</span>
+                <button class="chat-chip-x" type="button" title="移除引用" @click="removeRef(r.nodeId)">
+                  <X :size="12" />
+                </button>
+              </span>
+            </div>
+
+            <div class="chat-input-row">
+              <textarea
+                ref="chatInputRef"
+                class="chat-input"
+                v-model="chatInput"
+                :disabled="isSendingChat || !isLocalApi"
+                placeholder="输入消息，Enter 发送（Shift+Enter 换行）。输入 @ 可引用画布图片"
+                rows="2"
+                @input="updateMentionState"
+                @click="updateMentionState"
+                @keyup="updateMentionState"
+                @keydown.down.prevent="mentionOpen && (mentionActiveIndex = Math.min(mentionActiveIndex + 1, mentionCandidates.length - 1))"
+                @keydown.up.prevent="mentionOpen && (mentionActiveIndex = Math.max(mentionActiveIndex - 1, 0))"
+                @keydown.enter.exact.prevent="sendChat"
+                @keydown.enter.shift.stop
+                @keydown.tab.prevent="mentionOpen && selectMention(mentionActiveIndex)"
+                @keydown.esc.prevent="closeMentions"
+              ></textarea>
+
+              <button class="btn-primary chat-send" :disabled="isSendingChat || (!chatInput.trim() && chatRefs.length === 0) || !isLocalApi" @click="sendChat">
+                <Send :size="16" />
+              </button>
+            </div>
+
+            <div v-if="mentionOpen" class="chat-mention glass-card">
+              <div
+                v-for="(c, idx) in mentionCandidates"
+                :key="c.nodeId"
+                class="chat-mention-item"
+                :class="{ active: idx === mentionActiveIndex }"
+                @mousedown.prevent="selectMention(c)"
+              >
+                <img :src="c.imageUrl" class="chat-mention-img" />
+                <div class="chat-mention-name">{{ c.baseName }}</div>
+              </div>
+              <div v-if="mentionCandidates.length === 0" class="chat-mention-empty">
+                未找到可引用的图片（请先在画布上放入图片节点）
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+
       <!-- ============ DEFAULT SETTINGS PANEL ============ -->
       <template v-else>
       <!-- Header -->
@@ -869,8 +1341,8 @@ const generateTags = async () => {
       <button class="tool-btn glass-card" :class="{ active: activeTool === 2 }" @click="activeTool = 2" title="图片">
         <ImageIcon :size="18" />
       </button>
-      <button class="tool-btn glass-card" :class="{ active: activeTool === 3 }" @click="activeTool = 3" title="调色">
-        <Palette :size="18" />
+      <button class="tool-btn glass-card" :class="{ active: activeTool === 3 }" @click="activeTool = 3" title="对话">
+        <Bot :size="18" />
       </button>
 
       <div class="spacer"></div>
@@ -1620,6 +2092,309 @@ textarea::placeholder {
 .meta-error {
   color: var(--danger);
   font-size: 13px;
+  text-align: center;
+}
+
+/* ====== Chat Panel ====== */
+.chat-scroll {
+  padding: 0 18px;
+}
+
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 14px;
+}
+
+.chat-msg {
+  display: flex;
+}
+
+.chat-msg.user {
+  justify-content: flex-end;
+}
+
+.chat-msg.assistant {
+  justify-content: flex-start;
+}
+
+.chat-bubble {
+  max-width: 85%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--glass-border-light);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.chat-msg.user .chat-bubble {
+  background: rgba(46, 182, 255, 0.12);
+  border-color: rgba(46, 182, 255, 0.25);
+}
+
+.chat-img {
+  width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border-light);
+  background: rgba(255, 255, 255, 0.5);
+  margin-bottom: 8px;
+}
+
+.chat-text {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-main);
+}
+
+.chat-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 6px 2px 2px;
+}
+
+.thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--text-light);
+  opacity: 0.35;
+  animation: thinkingPulse 1.1s infinite ease-in-out;
+}
+
+.thinking-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.thinking-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes thinkingPulse {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
+  40% { transform: translateY(-2px); opacity: 0.9; }
+}
+
+.chat-msg-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chat-msg-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border-light);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.chat-msg-ref-img {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid var(--glass-border-light);
+}
+
+.chat-msg-ref-name {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--text-main);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chat-top-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-error {
+  color: var(--danger);
+  font-size: 12.5px;
+  text-align: left;
+  padding: 0 2px;
+}
+
+.chat-attach-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.chat-attach-img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--glass-border-light);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.chat-attach-note {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-light);
+  line-height: 1.4;
+}
+
+.chat-composer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 10px 12px;
+}
+
+.chat-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--glass-border-light);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.chat-chip-img {
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid var(--glass-border-light);
+}
+
+.chat-chip-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-main);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border-light);
+  background: rgba(255, 255, 255, 0.45);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chat-chip-x:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.chat-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.chat-input {
+  flex: 1;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 13px;
+  color: var(--text-main);
+  min-height: 56px;
+  line-height: 1.5;
+  padding: 6px 6px;
+}
+
+.chat-send {
+  width: 44px;
+  height: 44px;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-mention {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: calc(100% + 8px);
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--glass-border-light);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 12px 30px rgba(0,0,0,0.12);
+  z-index: 200;
+}
+
+.chat-mention-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  cursor: pointer;
+}
+
+.chat-mention-item:hover,
+.chat-mention-item.active {
+  background: rgba(46, 182, 255, 0.10);
+}
+
+.chat-mention-img {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 1px solid var(--glass-border-light);
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.chat-mention-name {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-main);
+}
+
+.chat-mention-empty {
+  padding: 10px 12px;
+  font-size: 12.5px;
+  color: var(--text-light);
   text-align: center;
 }
 </style>

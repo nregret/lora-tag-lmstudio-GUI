@@ -1,5 +1,6 @@
 import { ref, watch } from 'vue'
 import systemPromptTemplate from './assets/systemprompt.txt?raw'
+import { blobToDataUrlScaled } from './utils/image'
 
 export interface NodeData {
   id: number
@@ -131,12 +132,7 @@ export const generateTagsForActiveNodes = async (
       // Get Base64 image from Blob URL
       const response = await fetch(node.imageUrl)
       const blob = await response.blob()
-      const base64data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onloadend = () => resolve(reader.result as string)
-        reader.onerror = reject
-        reader.readAsDataURL(blob)
-      })
+      const base64data = await blobToDataUrlScaled(blob, { maxSide: 768, mime: 'image/jpeg', quality: 0.85 })
 
       // Construct Prompt Additions
       let customInstructions = `\n\n【用户动态要求】\n`
@@ -197,12 +193,29 @@ export const generateTagsForActiveNodes = async (
       })
 
       if (!res.ok) {
-        throw new Error(`API 请求失败: ${res.statusText}`)
+        let errBody = ''
+        try { errBody = await res.text() } catch {}
+        console.error('Tagging API error:', res.status, res.statusText, errBody)
+        throw new Error(`API 请求失败: ${res.status} ${res.statusText}${errBody ? `\n${errBody}` : ''}`)
       }
 
       const data = await res.json()
-      let generatedText = data.choices?.[0]?.message?.content || ''
-      generatedText = generatedText.trim()
+      const choice0 = data?.choices?.[0]
+      const content = choice0?.message?.content
+      let generatedText = ''
+      if (typeof content === 'string') generatedText = content
+      else if (Array.isArray(content)) {
+        generatedText = content
+          .map((b: any) => (typeof b?.text === 'string' ? b.text : typeof b?.content === 'string' ? b.content : ''))
+          .filter(Boolean)
+          .join('')
+      } else if (typeof choice0?.text === 'string') generatedText = choice0.text
+      else if (typeof data?.output_text === 'string') generatedText = data.output_text
+
+      generatedText = String(generatedText || '').trim()
+      if (!generatedText) {
+        throw new Error('模型返回空内容（请检查本地模型是否可正常对话/是否支持图片输入）')
+      }
 
       // Save to file overwriting previous content
       const txtFileName = node.baseName + '.txt'
@@ -218,9 +231,13 @@ export const generateTagsForActiveNodes = async (
     }
   } catch (error) {
     console.error("生成标签失败:", error)
-    alert("打标失败：" + (error as Error).message)
+    const msg = (error as Error).message || ''
+    if (/image|vision|multimodal|modalit|image_url|content.*array|unsupported/i.test(msg)) {
+      alert("打标失败：当前本地模型不支持图片输入（请在 LM Studio 换成支持视觉的模型，或改用云端多模态模型）")
+    } else {
+      alert("打标失败：" + msg)
+    }
   } finally {
     isGeneratingTags.value = false
   }
 }
-
