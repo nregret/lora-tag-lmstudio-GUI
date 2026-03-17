@@ -153,6 +153,10 @@ const openApiModal = (tab: 'local' | 'cloud') => {
   padding: 0 24px;
   height: 100%;
   position: relative;
+  /* Production hardening: ensure blur even if global .glass-bar is missing/overridden */
+  background: var(--acrylic-bar-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .top-progress {
