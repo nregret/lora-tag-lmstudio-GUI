@@ -14,6 +14,7 @@ import {
   X
 } from 'lucide-vue-next'
 import { ref, computed, watch, nextTick } from 'vue'
+import type { ComponentPublicInstance } from 'vue'
 import {
   activeNodeIds,
   activeNodeTagContent,
@@ -99,11 +100,12 @@ const mentionOpen = ref(false)
 const mentionQuery = ref('')
 const mentionAnchor = ref(-1)
 const mentionActiveIndex = ref(0)
-const mentionListRef = ref<HTMLElement | null>(null)
 const mentionItemRefs = ref<Array<HTMLElement | null>>([])
 
-const setMentionItemRef = (idx: number) => (el: HTMLElement | null) => {
-  mentionItemRefs.value[idx] = el
+const setMentionItemRef =
+  (idx: number) =>
+  (el: Element | ComponentPublicInstance | null) => {
+    mentionItemRefs.value[idx] = el instanceof HTMLElement ? el : null
 }
 
 async function nodeImageUrlToDataUrl(imageUrl: string) {
@@ -364,7 +366,6 @@ async function sendChat() {
     let buf = ''
     let rawAll = ''
     let receivedAnyPiece = false
-    let doneSeen = false
 
     const extractPiece = (evt: any) => {
       const choice0 = evt?.choices?.[0]
@@ -398,7 +399,7 @@ async function sendChat() {
         let payloadStr = ''
         if (line.startsWith('data:')) {
           payloadStr = line.slice(5).trim()
-          if (payloadStr === '[DONE]') { doneSeen = true; continue }
+          if (payloadStr === '[DONE]') continue
         } else if (line.startsWith('{') || line.startsWith('[')) {
           // NDJSON-style streaming (or mislabelled content-type)
           payloadStr = line
@@ -496,7 +497,9 @@ async function inflateZlib(data: Uint8Array): Promise<Uint8Array> {
     throw new Error('当前环境不支持解压缩 PNG 压缩元数据（iTXt/zTXt），请使用较新的 Chromium 内核浏览器')
   }
 
-  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStreamCtor('deflate'))
+  // TS note: ensure the Uint8Array uses an ArrayBuffer-backed buffer (not ArrayBufferLike)
+  const safe = new Uint8Array(data)
+  const stream = new Blob([safe]).stream().pipeThrough(new DecompressionStreamCtor('deflate'))
   const ab = await new Response(stream).arrayBuffer()
   return new Uint8Array(ab)
 }
@@ -1209,7 +1212,7 @@ const generateTags = async () => {
               </button>
             </div>
 
-            <div v-if="mentionOpen" class="chat-mention glass-card" ref="mentionListRef">
+            <div v-if="mentionOpen" class="chat-mention glass-card">
               <div
                 v-for="(c, idx) in mentionCandidates"
                 :key="c.nodeId"
