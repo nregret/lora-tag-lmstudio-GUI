@@ -1449,7 +1449,6 @@ const generateTags = async () => {
   /* Production hardening: ensure blur even if global .glass-panel is missing/overridden */
   background: var(--acrylic-panel-bg);
   backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
 }
 
 .sidebar {

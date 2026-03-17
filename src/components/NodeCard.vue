@@ -38,7 +38,6 @@ defineProps<{
   /* Override panel opacity for nodes to be slightly more solid but still glassy */
   background: var(--ui-control-bg);
   backdrop-filter: var(--blur-md);
-  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-light);
 }
 

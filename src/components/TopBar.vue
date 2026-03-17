@@ -41,10 +41,10 @@ const openApiModal = (tab: 'local' | 'cloud') => {
   
       <!-- Center: Navigation -->
       <nav class="nav-links">
-        <a href="#" class="nav-item">PROJECTS</a>
+        <a href="#" class="nav-item">FK 大力</a>
         <a href="#" class="nav-item active">DATASET</a>
-        <a href="#" class="nav-item">TRAINING</a>
-        <a href="#" class="nav-item">NODES</a>
+        <a href="#" class="nav-item">FK 赵包</a>
+        <a href="#" class="nav-item">LV CS</a>
       </nav>
 
       <!-- Right: Actions -->
@@ -156,7 +156,6 @@ const openApiModal = (tab: 'local' | 'cloud') => {
   /* Production hardening: ensure blur even if global .glass-bar is missing/overridden */
   background: var(--acrylic-bar-bg);
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 .top-progress {

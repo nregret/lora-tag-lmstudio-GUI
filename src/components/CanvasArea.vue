@@ -511,7 +511,6 @@ onUnmounted(() => {
   border: 1px solid var(--glass-border-light);
   box-shadow: var(--glass-shadow-lg);
   backdrop-filter: var(--blur-lg);
-  -webkit-backdrop-filter: var(--blur-lg);
   color: var(--text-main);
   font-size: 11px;
   font-weight: 800;

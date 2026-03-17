@@ -84,7 +84,6 @@ onMounted(async () => {
   /* Production hardening: ensure blur even if global .glass-bar is missing/overridden */
   background: var(--acrylic-bar-bg);
   backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 10px;
   font-weight: 600;
