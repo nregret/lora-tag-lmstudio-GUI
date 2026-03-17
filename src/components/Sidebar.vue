@@ -22,7 +22,6 @@ import {
   batchInsertWord,
   isLocalApi,
   isGeneratingTags,
-  taggingProgress,
   generateTagsForActiveNodes,
   nodes,
   currentDirectoryHandle,
@@ -966,10 +965,6 @@ const generateTags = async () => {
 
 <template>
   <div class="sidebar-wrapper glass-panel">
-    <!-- Tagging progress (overlay; avoid layout gaps) -->
-    <div class="sidebar-progress" v-show="taggingProgress > 0">
-      <div class="sidebar-progress-bar" :style="{ width: taggingProgress + '%' }"></div>
-    </div>
     <!-- Main Panel -->
     <aside class="sidebar">
       <!-- ============ TAG VIEW PANEL ============ -->
@@ -1451,29 +1446,6 @@ const generateTags = async () => {
   border-right: none;
   border-top: none;
   border-bottom: none;
-  position: relative;
-}
-
-.sidebar-progress {
-  position: absolute;
-  left: 18px;
-  right: 18px;
-  top: 10px;
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(46, 182, 255, 0.12);
-  overflow: hidden;
-  z-index: 50;
-  pointer-events: none;
-}
-
-.sidebar-progress-bar {
-  height: 100%;
-  width: 0%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--primary) 0%, #0099ff 55%, #00d2ff 100%);
-  box-shadow: 0 0 14px rgba(46, 182, 255, 0.45);
-  transition: width 0.18s ease;
 }
 
 .sidebar {
