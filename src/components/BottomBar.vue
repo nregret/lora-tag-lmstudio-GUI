@@ -5,16 +5,39 @@ import { ref, onMounted } from 'vue'
 const gpuInfo = ref('Detecting...')
 const ramInfo = ref('...')
 
+function detectGpuRenderer(): string | null {
+  try {
+    const canvas = document.createElement('canvas')
+    const gl =
+      (canvas.getContext('webgl') as WebGLRenderingContext | null) ||
+      (canvas.getContext('experimental-webgl') as WebGLRenderingContext | null)
+    if (!gl) return null
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info') as any
+    if (!dbg) return null
+    const renderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+    return typeof renderer === 'string' && renderer.trim() ? renderer.trim() : null
+  } catch {
+    return null
+  }
+}
+
 onMounted(async () => {
   try {
-    const res = await fetch('/api/hwinfo')
-    if (res.ok) {
-      const data = await res.json()
-      gpuInfo.value = data.gpuInfo
-      ramInfo.value = data.ramInfo
-    } else {
-      gpuInfo.value = 'Unknown GPU'
+    if (import.meta.env.DEV) {
+      const res = await fetch('/api/hwinfo')
+      if (res.ok) {
+        const data = await res.json()
+        gpuInfo.value = data.gpuInfo
+        ramInfo.value = data.ramInfo
+        return
+      }
     }
+
+    const renderer = detectGpuRenderer()
+    gpuInfo.value = renderer || 'Unknown GPU'
+
+    const dm = (navigator as any).deviceMemory
+    ramInfo.value = typeof dm === 'number' && dm > 0 ? `${dm}GB（估算）` : 'Unknown'
   } catch (e) {
     console.error('Failed to fetch hw info', e)
     gpuInfo.value = 'Unknown GPU'

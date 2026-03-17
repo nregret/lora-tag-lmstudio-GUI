@@ -14,7 +14,21 @@ import {
   X
 } from 'lucide-vue-next'
 import { ref, computed, watch, nextTick } from 'vue'
-import { activeNodeIds, activeNodeTagContent, saveActiveNodeTags, batchInsertWord, isLocalApi, isGeneratingTags, generateTagsForActiveNodes, nodes, currentDirectoryHandle } from '../store'
+import {
+  activeNodeIds,
+  activeNodeTagContent,
+  saveActiveNodeTags,
+  batchInsertWord,
+  isLocalApi,
+  isGeneratingTags,
+  generateTagsForActiveNodes,
+  nodes,
+  currentDirectoryHandle,
+  buildAuthHeaders,
+  getChatCompletionsUrl,
+  getActiveApiModel,
+  getActiveApiBaseUrl
+} from '../store'
 import { blobToDataUrlScaled } from '../utils/image'
 
 // --- Active Tool ---
@@ -67,7 +81,13 @@ type ChatMessage = {
   ts: number
 }
 
-const LOCAL_CHAT_URL = 'http://127.0.0.1:1234/v1/chat/completions'
+function getChatEndpointOrThrow() {
+  const baseUrl = getActiveApiBaseUrl()
+  const model = getActiveApiModel()
+  if (!baseUrl) throw new Error('未配置 API Base URL')
+  if (!model) throw new Error('未配置 Model')
+  return { url: getChatCompletionsUrl(), model }
+}
 const chatMessages = ref<ChatMessage[]>([])
 const chatInput = ref('')
 const isSendingChat = ref(false)
@@ -79,7 +99,12 @@ const mentionOpen = ref(false)
 const mentionQuery = ref('')
 const mentionAnchor = ref(-1)
 const mentionActiveIndex = ref(0)
-const chatStatusLabel = computed(() => (isLocalApi.value ? '本地' : '仅本地'))
+const mentionListRef = ref<HTMLElement | null>(null)
+const mentionItemRefs = ref<Array<HTMLElement | null>>([])
+
+const setMentionItemRef = (idx: number) => (el: HTMLElement | null) => {
+  mentionItemRefs.value[idx] = el
+}
 
 async function nodeImageUrlToDataUrl(imageUrl: string) {
   const res = await fetch(imageUrl)
@@ -111,10 +136,16 @@ function updateMentionState() {
     mentionOpen.value = false
     return
   }
+  const wasOpen = mentionOpen.value
+  const prevQuery = mentionQuery.value
+  const prevAnchor = mentionAnchor.value
   mentionOpen.value = true
   mentionQuery.value = q
   mentionAnchor.value = at
-  mentionActiveIndex.value = 0
+  // Only reset selection when opening fresh or query/anchor changed.
+  if (!wasOpen || prevQuery !== q || prevAnchor !== at) {
+    mentionActiveIndex.value = 0
+  }
 }
 
 function closeMentions() {
@@ -130,9 +161,10 @@ const mentionCandidates = computed(() => {
     .filter(n => typeof (n as any).imageUrl === 'string' && (n as any).imageUrl)
     .map(n => ({ nodeId: String((n as any).id), baseName: String((n as any).baseName || ''), imageUrl: String((n as any).imageUrl) }))
     .filter(n => n.baseName)
+    .sort((a, b) => a.baseName.localeCompare(b.baseName))
 
-  if (!q) return imgs.slice(0, 8)
-  return imgs.filter(n => n.baseName.toLowerCase().includes(q)).slice(0, 8)
+  if (!q) return imgs
+  return imgs.filter(n => n.baseName.toLowerCase().includes(q))
 })
 
 function selectMention(idxOrNode: number | { nodeId: string; baseName: string; imageUrl: string }) {
@@ -170,6 +202,40 @@ function clearRefs() {
   chatRefs.value = []
 }
 
+function onChatKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') {
+    if (mentionOpen.value) {
+      e.preventDefault()
+      closeMentions()
+    }
+    return
+  }
+
+  if (mentionOpen.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      mentionActiveIndex.value = Math.min(mentionActiveIndex.value + 1, mentionCandidates.value.length - 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      mentionActiveIndex.value = Math.max(mentionActiveIndex.value - 1, 0)
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      selectMention(mentionActiveIndex.value)
+      return
+    }
+  }
+
+  // Normal send: Enter (Shift+Enter new line)
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    sendChat()
+  }
+}
+
 function clearChat() {
   chatMessages.value = []
   chatInput.value = ''
@@ -187,10 +253,6 @@ async function scrollChatToBottom() {
 
 async function sendChat() {
   chatError.value = ''
-  if (!isLocalApi.value) {
-    chatError.value = '当前仅实现本地端（请在设置里切换到“本地 API”）'
-    return
-  }
   const text = chatInput.value.trim()
   const hasRefs = chatRefs.value.length > 0
   if (!text && !hasRefs) return
@@ -208,6 +270,9 @@ async function sendChat() {
 
   isSendingChat.value = true
   try {
+    const { url, model } = getChatEndpointOrThrow()
+    const headers = { ...buildAuthHeaders(), Accept: 'text/event-stream' }
+
     const history = chatMessages.value.slice(-12).map(m => ({ role: m.role, content: m.content }))
     const messages: any[] = [{ role: 'system', content: '你是一个简洁、可靠的助手。' }, ...history]
 
@@ -231,16 +296,16 @@ async function sendChat() {
     }
 
     const payload = {
-      model: 'local-model',
+      model,
       messages,
       temperature: 0.7,
       max_tokens: 800,
       stream: true
     }
 
-    const res = await fetch(LOCAL_CHAT_URL, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      headers,
       body: JSON.stringify(payload)
     })
 
@@ -378,9 +443,9 @@ async function sendChat() {
     if (!receivedAnyPiece) {
       try {
         const retryPayload = { ...payload, stream: false }
-        const retryRes = await fetch(LOCAL_CHAT_URL, {
+        const retryRes = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: buildAuthHeaders(),
           body: JSON.stringify(retryPayload)
         })
         if (retryRes.ok) {
@@ -793,6 +858,20 @@ watch([activeTool, activeNodeIds], ([tool]) => {
   if (tool === 2) loadImageMetadata()
 })
 
+watch(mentionCandidates, (list) => {
+  if (mentionActiveIndex.value > Math.max(0, list.length - 1)) {
+    mentionActiveIndex.value = Math.max(0, list.length - 1)
+  }
+  mentionItemRefs.value = new Array(list.length).fill(null)
+})
+
+watch([mentionOpen, mentionActiveIndex], async ([open]) => {
+  if (!open) return
+  await nextTick()
+  const el = mentionItemRefs.value[mentionActiveIndex.value]
+  if (el) el.scrollIntoView({ block: 'nearest' })
+})
+
 const tagType = ref('tag') 
 const tagLength = ref('moderate') 
 
@@ -854,8 +933,10 @@ const propertyTags = ref([
   { id: 'clothes', name: '服装', selected: true },
   { id: 'accessories', name: '配饰', selected: false },
   { id: 'pose', name: '姿势', selected: false },
+  { id: 'expression', name: '表情', selected: false },
   { id: 'bg', name: '背景', selected: true },
   { id: 'angle', name: '拍摄角度', selected: false },
+  { id: 'lighting', name: '光影', selected: false },
 ])
 
 const isMultiSelect = computed(() => activeNodeIds.value.length > 1)
@@ -1055,9 +1136,6 @@ const generateTags = async () => {
               <Bot :size="20" color="var(--primary)" />
               <h2>AI 对话</h2>
             </div>
-            <div class="tag-count-badge">
-              {{ chatStatusLabel }}
-            </div>
           </div>
         </div>
 
@@ -1068,7 +1146,7 @@ const generateTags = async () => {
             <Bot :size="36" class="empty-icon" />
             <span>连接到本地模型（LM Studio / OpenAI 兼容接口）</span>
             <span style="font-size: 12px; color: var(--text-light); margin-top: 6px;">
-              端口：127.0.0.1:1234（仅本地 API）
+              使用顶部的“本地/云端 API”按钮进行切换与配置
             </span>
           </div>
 
@@ -1117,31 +1195,27 @@ const generateTags = async () => {
                 ref="chatInputRef"
                 class="chat-input"
                 v-model="chatInput"
-                :disabled="isSendingChat || !isLocalApi"
+                :disabled="isSendingChat"
                 placeholder="输入消息，Enter 发送（Shift+Enter 换行）。输入 @ 可引用画布图片"
                 rows="2"
                 @input="updateMentionState"
                 @click="updateMentionState"
-                @keyup="updateMentionState"
-                @keydown.down.prevent="mentionOpen && (mentionActiveIndex = Math.min(mentionActiveIndex + 1, mentionCandidates.length - 1))"
-                @keydown.up.prevent="mentionOpen && (mentionActiveIndex = Math.max(mentionActiveIndex - 1, 0))"
-                @keydown.enter.exact.prevent="sendChat"
-                @keydown.enter.shift.stop
+                @keydown="onChatKeydown"
                 @keydown.tab.prevent="mentionOpen && selectMention(mentionActiveIndex)"
-                @keydown.esc.prevent="closeMentions"
               ></textarea>
 
-              <button class="btn-primary chat-send" :disabled="isSendingChat || (!chatInput.trim() && chatRefs.length === 0) || !isLocalApi" @click="sendChat">
+              <button class="btn-primary chat-send" :disabled="isSendingChat || (!chatInput.trim() && chatRefs.length === 0)" @click="sendChat">
                 <Send :size="16" />
               </button>
             </div>
 
-            <div v-if="mentionOpen" class="chat-mention glass-card">
+            <div v-if="mentionOpen" class="chat-mention glass-card" ref="mentionListRef">
               <div
                 v-for="(c, idx) in mentionCandidates"
                 :key="c.nodeId"
                 class="chat-mention-item"
                 :class="{ active: idx === mentionActiveIndex }"
+                :ref="setMentionItemRef(idx)"
                 @mousedown.prevent="selectMention(c)"
               >
                 <img :src="c.imageUrl" class="chat-mention-img" />
@@ -1159,21 +1233,13 @@ const generateTags = async () => {
       <template v-else>
       <!-- Header -->
       <div class="header">
-        <div class="title-row">
-          <div class="title-with-icon">
-            <Settings :size="20" color="var(--primary)" />
-            <h2>打标设置</h2>
-          </div>
-          <div 
-            class="sync-badge glass-card" 
-            :class="{ 'local-badge': isLocalApi, 'cloud-badge': !isLocalApi }"
-            @click="isLocalApi = !isLocalApi"
-            title="点击切换 本地/云端 API"
-          >
-            {{ isLocalApi ? '本地 API' : '云端 API' }}
+          <div class="title-row">
+            <div class="title-with-icon">
+              <Settings :size="20" color="var(--primary)" />
+              <h2>打标设置</h2>
+            </div>
           </div>
         </div>
-      </div>
 
       <div class="divider"></div>
 
@@ -1356,38 +1422,13 @@ const generateTags = async () => {
 </template>
 
 <style scoped>
-/* Sync Badge */
-.sync-badge {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 4px 10px;
-  border-radius: 20px;
-  cursor: pointer;
-  transition: all 0.2s;
-  user-select: none;
-}
-.local-badge {
-  background: rgba(46, 182, 255, 0.1);
-  color: var(--primary);
-  border: 1px solid rgba(46, 182, 255, 0.3);
-}
-.cloud-badge {
-  background: rgba(16, 185, 129, 0.1);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.3);
-}
-.sync-badge:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-}
-
 /* Spinner */
 .loading-spinner {
   width: 16px;
   height: 16px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
+  border: 2px solid var(--ui-spinner-ring);
   border-radius: 50%;
-  border-top-color: #fff;
+  border-top-color: var(--ui-spinner-top);
   animation: spin 1s linear infinite;
   display: inline-block;
 }
@@ -1444,7 +1485,7 @@ const generateTags = async () => {
 
 .divider.subtle {
   margin: 24px 24px;
-  background: rgba(200, 210, 225, 0.2);
+  background: var(--glass-border-dark);
 }
 
 .content-scroll {
@@ -1493,9 +1534,9 @@ const generateTags = async () => {
   font-weight: 300;
   color: var(--text-main);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.2s ease, background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
   border: 1px solid var(--glass-border-subtle);
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--ui-control-bg-ultrafaint);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1507,7 +1548,7 @@ const generateTags = async () => {
 }
 
 .radio-label:hover {
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--ui-hover-bg);
   color: var(--text-main);
   box-shadow: var(--glass-shadow-sm);
   transform: translateY(-1px);
@@ -1532,11 +1573,11 @@ const generateTags = async () => {
   font-weight: 250;
   padding: 8px 16px;
   border-radius: 20px;
-  background: rgba(240, 244, 248, 0.5);
+  background: var(--ui-preview-bg);
   border: 1px solid var(--glass-border-light);
   color: var(--text-main);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.2s ease, background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
   user-select: none;
   display: inline-flex;
   align-items: center;
@@ -1544,7 +1585,7 @@ const generateTags = async () => {
 }
 
 .check-tag:hover {
-  background: white;
+  background: var(--ui-solid-bg);
   color: var(--text-main);
   box-shadow: var(--glass-shadow-sm);
 }
@@ -1586,7 +1627,7 @@ textarea::placeholder {
 }
 
 .is-disabled {
-  background: rgba(200, 210, 225, 0.2);
+  background: var(--ui-control-bg-ultrafaint);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1621,18 +1662,18 @@ textarea::placeholder {
 
 .insert-input {
   width: 100%;
-  background: rgba(225, 232, 240, 0.4);
+  background: var(--glass-inset-bg);
   border: 1px solid var(--glass-border-subtle);
   border-radius: 10px;
   padding: 12px 14px;
   font-size: 14px;
   color: var(--text-main);
-  transition: all 0.2s;
+  transition: all 0.2s, background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
   box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
 }
 
 .insert-input:focus {
-  background: white;
+  background: var(--ui-solid-bg);
   border-color: var(--primary);
   box-shadow: 0 0 0 3px rgba(46, 182, 255, 0.2);
 }
@@ -1664,12 +1705,13 @@ textarea::placeholder {
   flex-direction: column;
   gap: 8px;
   align-items: center;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--ui-panel-strong-bg);
   border: 1px solid var(--primary);
   box-shadow: 0 8px 24px rgba(46, 182, 255, 0.2);
   border-radius: 12px;
   z-index: 100;
   cursor: default;
+  transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease), box-shadow var(--theme-ease);
 }
 
 .popover-arrow {
@@ -1679,9 +1721,10 @@ textarea::placeholder {
   transform: translateX(-50%) rotate(45deg);
   width: 12px;
   height: 12px;
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--ui-panel-strong-bg);
   border-right: 1px solid var(--primary);
   border-bottom: 1px solid var(--primary);
+  transition: background-color var(--theme-ease), border-color var(--theme-ease);
 }
 
 .popover-text {
@@ -1695,13 +1738,13 @@ textarea::placeholder {
   text-align: center;
   border-radius: 8px;
   border: 1px solid var(--glass-border-dark);
-  background: white;
+  background: var(--ui-control-bg);
   color: var(--text-main);
   font-size: 18px;
   font-weight: 800;
   outline: none;
   padding: 8px;
-  transition: border-color 0.2s;
+  transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
 }
 
 .popover-input:focus {
@@ -1786,7 +1829,7 @@ textarea::placeholder {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  box-shadow: 0 8px 20px rgba(46, 182, 255, 0.3), inset 0 1px 1px rgba(255,255,255,0.4);
+  box-shadow: 0 8px 20px rgba(46, 182, 255, 0.3), inset 0 1px 1px var(--ui-inset-highlight);
   transition: transform 0.2s, box-shadow 0.2s;
   cursor: pointer;
   border: none;
@@ -1798,7 +1841,7 @@ textarea::placeholder {
 
 .btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow: 0 10px 25px rgba(46, 182, 255, 0.4), inset 0 1px 1px rgba(255,255,255,0.4);
+  box-shadow: 0 10px 25px rgba(46, 182, 255, 0.4), inset 0 1px 1px var(--ui-inset-highlight);
 }
 
 /* Floating Tools Toolbar */
@@ -1978,10 +2021,11 @@ textarea::placeholder {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: rgba(255, 255, 255, 0.5);
+  background: var(--ui-preview-bg);
   border: 1px solid var(--glass-border-light);
   border-radius: 10px;
   padding: 10px 12px;
+  transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
 }
 
 /* model / sampler spans full row */
@@ -2051,14 +2095,15 @@ textarea::placeholder {
   height: 22px;
   border-radius: 8px;
   border: 1px solid var(--glass-border-light);
-  background: rgba(255, 255, 255, 0.45);
+  background: var(--ui-control-bg-faint);
   color: var(--text-muted);
   cursor: pointer;
+  transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
 }
 
 .meta-action-btn:hover {
   color: var(--text-main);
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--ui-control-bg-secondary);
 }
 
 .positive-label {
@@ -2124,7 +2169,8 @@ textarea::placeholder {
   padding: 10px 12px;
   border-radius: 14px;
   border: 1px solid var(--glass-border-light);
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--ui-control-bg-secondary);
+  transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
 }
 
 .chat-msg.user .chat-bubble {
@@ -2138,7 +2184,7 @@ textarea::placeholder {
   object-fit: contain;
   border-radius: 10px;
   border: 1px solid var(--glass-border-light);
-  background: rgba(255, 255, 255, 0.5);
+  background: var(--ui-preview-bg);
   margin-bottom: 8px;
 }
 
@@ -2194,7 +2240,8 @@ textarea::placeholder {
   padding: 6px 8px;
   border-radius: 999px;
   border: 1px solid var(--glass-border-light);
-  background: rgba(255, 255, 255, 0.55);
+  background: var(--ui-control-bg-soft);
+  transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
 }
 
 .chat-msg-ref-img {
@@ -2248,7 +2295,7 @@ textarea::placeholder {
   object-fit: cover;
   border-radius: 10px;
   border: 1px solid var(--glass-border-light);
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--ui-control-bg);
 }
 
 .chat-attach-note {
@@ -2280,7 +2327,8 @@ textarea::placeholder {
   padding: 6px 8px;
   border-radius: 999px;
   border: 1px solid var(--glass-border-light);
-  background: rgba(255, 255, 255, 0.65);
+  background: var(--ui-control-bg-secondary);
+  transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
 }
 
 .chat-chip-img {
@@ -2309,14 +2357,15 @@ textarea::placeholder {
   height: 18px;
   border-radius: 6px;
   border: 1px solid var(--glass-border-light);
-  background: rgba(255, 255, 255, 0.45);
+  background: var(--ui-control-bg-faint);
   color: var(--text-muted);
   cursor: pointer;
+  transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
 }
 
 .chat-chip-x:hover {
   color: var(--text-main);
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--ui-hover-bg-2);
 }
 
 .chat-input-row {
@@ -2357,9 +2406,10 @@ textarea::placeholder {
   padding: 8px;
   border-radius: 14px;
   border: 1px solid var(--glass-border-light);
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--ui-solid-bg);
   box-shadow: 0 12px 30px rgba(0,0,0,0.12);
   z-index: 200;
+  transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease), box-shadow var(--theme-ease);
 }
 
 .chat-mention-item {
@@ -2382,7 +2432,7 @@ textarea::placeholder {
   border-radius: 10px;
   object-fit: cover;
   border: 1px solid var(--glass-border-light);
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--ui-control-bg);
 }
 
 .chat-mention-name {

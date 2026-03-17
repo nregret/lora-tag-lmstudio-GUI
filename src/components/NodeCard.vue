@@ -33,10 +33,10 @@ defineProps<{
   border-radius: 12px;
   overflow: hidden;
   box-shadow: var(--glass-shadow-md);
-  transition: box-shadow 0.2s, transform 0.2s;
+  transition: box-shadow 0.2s, transform 0.2s, background-color var(--theme-ease), border-color var(--theme-ease);
   cursor: grab;
   /* Override panel opacity for nodes to be slightly more solid but still glassy */
-  background: rgba(255, 255, 255, 0.6);
+  background: var(--ui-control-bg);
   backdrop-filter: var(--blur-md);
   -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-light);
@@ -62,7 +62,8 @@ defineProps<{
   justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid var(--glass-border-dark);
-  background: rgba(255, 255, 255, 0.4);
+  background: var(--ui-control-bg-soft);
+  transition: background-color var(--theme-ease), border-color var(--theme-ease);
 }
 
 .header-left {

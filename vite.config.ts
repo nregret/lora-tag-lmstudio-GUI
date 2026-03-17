@@ -47,6 +47,8 @@ export const hwInfoPlugin = () => {
 }
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [vue(), hwInfoPlugin()],
+export default defineConfig(({ command }) => {
+  return {
+    plugins: [vue(), ...(command === 'serve' ? [hwInfoPlugin()] : [])],
+  }
 })

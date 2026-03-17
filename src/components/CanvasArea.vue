@@ -437,7 +437,7 @@ onUnmounted(() => {
 }
 
 .control-btn:hover {
-  background: rgba(255,255,255,0.8);
+  background: var(--ui-hover-bg);
   color: var(--text-main);
 }
 
@@ -482,7 +482,7 @@ onUnmounted(() => {
   z-index: 20;
   border-radius: 50%;
   background: var(--primary);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.8), 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: 0 0 0 2px var(--ui-handle-ring), 0 2px 6px rgba(0,0,0,0.18);
   opacity: 0;
   transition: opacity 0.2s, transform 0.2s;
 }
@@ -507,23 +507,24 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  /* Strong glass effect */
-  background: linear-gradient(135deg, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0.4) 100%);
-  border: 1px solid rgba(255,255,255,0.8);
-  box-shadow: 0 12px 32px rgba(30, 41, 59, 0.1), inset 0 2px 4px rgba(255,255,255,0.5);
+  background: var(--ui-panel-strong-bg);
+  border: 1px solid var(--glass-border-light);
+  box-shadow: var(--glass-shadow-lg);
+  backdrop-filter: var(--blur-lg);
+  -webkit-backdrop-filter: var(--blur-lg);
   color: var(--text-main);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 1px;
   cursor: pointer;
   z-index: 20;
-  transition: all 0.2s;
+  transition: transform 0.2s, box-shadow 0.2s, background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
 }
 
 .floating-drop-zone:hover {
-  background: linear-gradient(135deg, rgba(255,255,255,0.8) 0%, rgba(255,255,255,0.5) 100%);
+  background: var(--ui-solid-bg);
   transform: translateY(-2px);
-  box-shadow: 0 16px 40px rgba(30, 41, 59, 0.15), inset 0 2px 4px rgba(255,255,255,0.5);
+  box-shadow: var(--glass-shadow-lg);
 }
 
 .floating-drop-zone .icon {
