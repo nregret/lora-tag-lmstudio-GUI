@@ -6,7 +6,6 @@ import { computed, ref } from 'vue'
 import {
   isLocalApi,
   isDarkMode,
-  taggingProgress,
   localApiBaseUrl,
   localApiModel,
   localApiKey,
@@ -46,7 +45,7 @@ const openApiModal = (tab: 'local' | 'cloud') => {
         <a href="#" class="nav-item">TRAINING</a>
         <a href="#" class="nav-item">NODES</a>
       </nav>
-  
+
       <!-- Right: Actions -->
       <div class="actions">
         <button
@@ -70,11 +69,6 @@ const openApiModal = (tab: 'local' | 'cloud') => {
         <button class="icon-btn glass-card" style="color: #fca5a5;">
           <Monitor :size="16" />
         </button>
-      </div>
-  
-      <!-- Tagging progress (true progress) -->
-      <div class="top-progress" v-show="taggingProgress > 0">
-        <div class="top-progress-bar" :style="{ width: taggingProgress + '%' }"></div>
       </div>
     </header>
   
@@ -155,29 +149,11 @@ const openApiModal = (tab: 'local' | 'cloud') => {
   position: relative;
 }
 
-.top-progress {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 3px;
-  background: rgba(46, 182, 255, 0.10);
-  overflow: hidden;
-}
-
-.top-progress-bar {
-  height: 100%;
-  width: 0%;
-  background: linear-gradient(90deg, var(--primary) 0%, #0099ff 55%, #00d2ff 100%);
-  box-shadow: 0 -2px 10px rgba(46, 182, 255, 0.5);
-  transition: width 0.18s ease;
-}
-
-.logo {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
+ .logo {
+   display: flex;
+   align-items: center;
+   gap: 12px;
+ }
 
 .logo-icon {
   width: 32px;
