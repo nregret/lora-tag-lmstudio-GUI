@@ -34,7 +34,7 @@ import CanvasArea from './components/CanvasArea.vue'
 
 /* UI elements float above */
 .layer-top {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   width: 100%;
@@ -43,7 +43,7 @@ import CanvasArea from './components/CanvasArea.vue'
 }
 
 .layer-side {
-  position: absolute;
+  position: fixed;
   top: 70px;
   right: 0;
   height: calc(100vh - 114px);
@@ -53,7 +53,7 @@ import CanvasArea from './components/CanvasArea.vue'
 }
 
 .layer-bottom {
-  position: absolute;
+  position: fixed;
   bottom: 0;
   left: 0;
   width: 100%;

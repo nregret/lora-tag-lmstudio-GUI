@@ -50,5 +50,12 @@ export const hwInfoPlugin = () => {
 export default defineConfig(({ command }) => {
   return {
     plugins: [vue(), ...(command === 'serve' ? [hwInfoPlugin()] : [])],
+    build: {
+      // backdrop-filter 在 Chrome 76+ 无需 -webkit- 前缀
+      // 指定 cssTarget 让 lightningcss 保留无前缀的标准属性，
+      // 否则 Vite 8.x 的 lightningcss 会将其删除，导致线上模糊失效
+      cssTarget: 'chrome96',
+    },
   }
 })
+

@@ -152,9 +152,7 @@ input, textarea {
 .glass-bar {
   background: var(--acrylic-bar-bg);
   backdrop-filter: blur(12px);
-  backdrop-filter: var(--blur-md);
   -webkit-backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: var(--blur-md);
   border-bottom: 1px solid var(--glass-border-light);
   box-shadow: var(--glass-shadow-sm);
   transition: background-color var(--theme-ease), border-color var(--theme-ease), box-shadow var(--theme-ease);
@@ -163,9 +161,7 @@ input, textarea {
 .glass-panel {
   background: var(--acrylic-panel-bg);
   backdrop-filter: blur(24px);
-  backdrop-filter: var(--blur-lg);
   -webkit-backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: var(--blur-lg);
   border-left: 1px solid var(--glass-border-light);
   border-right: 1px solid var(--glass-border-light);
   box-shadow: var(--glass-shadow-lg);
@@ -175,9 +171,7 @@ input, textarea {
 .glass-card {
   background: var(--acrylic-element-bg);
   backdrop-filter: blur(12px);
-  backdrop-filter: var(--blur-md);
   -webkit-backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: var(--blur-md);
   border: 1px solid var(--glass-border-light);
   border-bottom: 1px solid var(--glass-border-subtle);
   border-right: 1px solid var(--glass-border-subtle);
