@@ -171,10 +171,7 @@ const openApiModal = (tab: 'local' | 'cloud') => {
 
             <div class="tip mini">提示：本工具完全不联网，您的设置信息将自动保存在您本地浏览器中，无需担心安全和重复填写。</div>
           </div>
-    
-          <div class="modal-actions">
-            <button class="btn" type="button" @click="showWelcomeModal = false">开始创作</button>
-          </div>
+  
         </div>
       </div>
     </Transition>
