@@ -1,7 +1,7 @@
 <script setup lang="ts">
 defineOptions({ inheritAttrs: false })
 
-import { Hexagon, Cloud, Moon, Sun, Settings, Monitor, X } from 'lucide-vue-next'
+import { Hexagon, Cloud, Moon, Sun, Settings, HelpCircle, X } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import {
   isLocalApi,
@@ -16,6 +16,7 @@ import {
 } from '../store'
 
 const showApiModal = ref(false)
+const showWelcomeModal = ref(true)
 const activeApiTab = ref<'local' | 'cloud'>('local')
 
 const syncLabel = computed(() => (isLocalApi.value ? '本地 API' : '云端 API'))
@@ -67,8 +68,8 @@ const openApiModal = (tab: 'local' | 'cloud') => {
         <button class="icon-btn glass-card" title="API 设置" @click="openApiModal(isLocalApi ? 'local' : 'cloud')">
           <Settings :size="16" />
         </button>
-        <button class="icon-btn glass-card" style="color: #fca5a5;">
-          <Monitor :size="16" />
+        <button class="icon-btn glass-card" title="使用帮助" @click="showWelcomeModal = true">
+          <HelpCircle :size="16" />
         </button>
       </div>
 
@@ -79,67 +80,163 @@ const openApiModal = (tab: 'local' | 'cloud') => {
     </header>
   
     <!-- API Settings Modal -->
-    <div v-if="showApiModal" class="modal-mask" @mousedown.self="showApiModal = false">
-      <div class="modal glass-card">
-        <div class="modal-header">
-          <div class="modal-title">API 设置（OpenAI 兼容）</div>
-          <button class="icon-btn glass-card" type="button" title="关闭" @click="showApiModal = false">
-            <X :size="16" />
-          </button>
-        </div>
-  
-        <div class="modal-tabs">
-          <button class="tab-btn" :class="{ active: activeApiTab === 'local' }" type="button" @click="activeApiTab = 'local'">
-            本地
-          </button>
-          <button class="tab-btn" :class="{ active: activeApiTab === 'cloud' }" type="button" @click="activeApiTab = 'cloud'">
-            云端
-          </button>
-        </div>
-  
-        <div class="modal-body" v-if="activeApiTab === 'local'">
-          <label class="field">
-            <div class="label">Base URL</div>
-            <input class="input" v-model="localApiBaseUrl" placeholder="http://127.0.0.1:1234/v1" />
-          </label>
-          <label class="field">
-            <div class="label">Model</div>
-            <input class="input" v-model="localApiModel" placeholder="local-model" />
-          </label>
-          <label class="field">
-            <div class="label">API Key（可选）</div>
-            <input class="input" type="password" autocomplete="off" v-model="localApiKey" placeholder="（无）" />
-          </label>
-          <div class="tip">右键点击顶部“本地/云端”按钮可快速打开此窗口。</div>
-        </div>
-  
-        <div class="modal-body" v-else>
-          <label class="field">
-            <div class="label">Base URL</div>
-            <input class="input" v-model="cloudApiBaseUrl" placeholder="https://api.openai.com/v1" />
-          </label>
-          <label class="field">
-            <div class="label">Model</div>
-            <input class="input" v-model="cloudApiModel" placeholder="例如：gpt-4o-mini" />
-          </label>
-          <label class="field">
-            <div class="label">API Key</div>
-            <input class="input" type="password" autocomplete="off" v-model="cloudApiKey" placeholder="sk-..." />
-          </label>
-        </div>
-  
-        <div class="modal-actions">
-          <button class="btn" type="button" @click="showApiModal = false">完成</button>
-          <button class="btn secondary" type="button" @click="(isLocalApi = activeApiTab === 'local'); showApiModal = false">
-            切换到此配置
-          </button>
+    <Transition name="modal" type="animation" :duration="{ enter: 400, leave: 300 }">
+      <div v-if="showApiModal" class="modal-mask" @mousedown.self="showApiModal = false">
+        <div class="modal glass-card">
+          <div class="modal-header">
+            <div class="modal-title">API 设置（OpenAI 兼容）</div>
+            <button class="icon-btn glass-card" type="button" title="关闭" @click="showApiModal = false">
+              <X :size="16" />
+            </button>
+          </div>
+    
+          <div class="modal-tabs">
+            <button class="tab-btn" :class="{ active: activeApiTab === 'local' }" type="button" @click="activeApiTab = 'local'">
+              本地
+            </button>
+            <button class="tab-btn" :class="{ active: activeApiTab === 'cloud' }" type="button" @click="activeApiTab = 'cloud'">
+              云端
+            </button>
+          </div>
+    
+          <div class="modal-body" v-if="activeApiTab === 'local'">
+            <label class="field">
+              <div class="label">Base URL</div>
+              <input class="input" v-model="localApiBaseUrl" placeholder="http://127.0.0.1:1234/v1" />
+            </label>
+            <label class="field">
+              <div class="label">Model</div>
+              <input class="input" v-model="localApiModel" placeholder="local-model" />
+            </label>
+            <label class="field">
+              <div class="label">API Key（可选）</div>
+              <input class="input" type="password" autocomplete="off" v-model="localApiKey" placeholder="（无）" />
+            </label>
+            <div class="tip">右键点击顶部“本地/云端”按钮可快速打开此窗口。</div>
+          </div>
+    
+          <div class="modal-body" v-else>
+            <label class="field">
+              <div class="label">Base URL</div>
+              <input class="input" v-model="cloudApiBaseUrl" placeholder="https://api.openai.com/v1" />
+            </label>
+            <label class="field">
+              <div class="label">Model</div>
+              <input class="input" v-model="cloudApiModel" placeholder="例如：gpt-4o-mini" />
+            </label>
+            <label class="field">
+              <div class="label">API Key</div>
+              <input class="input" type="password" autocomplete="off" v-model="cloudApiKey" placeholder="sk-..." />
+            </label>
+          </div>
+    
+          <div class="modal-actions">
+            <button class="btn" type="button" @click="showApiModal = false">完成</button>
+            <button class="btn secondary" type="button" @click="(isLocalApi = activeApiTab === 'local'); showApiModal = false">
+              切换到此配置
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Transition>
+
+    <!-- Welcome / Instructions Modal -->
+    <Transition name="modal" type="animation" :duration="{ enter: 400, leave: 300 }">
+      <div v-if="showWelcomeModal" class="modal-mask" @mousedown.self="showWelcomeModal = false">
+        <div class="modal glass-card welcome-card">
+          <div class="modal-header">
+            <div class="modal-title">🚀 欢迎使用 TagMaster Pro</div>
+            <button class="icon-btn glass-card" type="button" title="关闭" @click="showWelcomeModal = false">
+              <X :size="16" />
+            </button>
+          </div>
+    
+          <div class="modal-body welcome-body">
+            <p class="welcome-intro">在开始之前，请阅读以下使用细则：</p>
+            
+            <ul class="rule-list">
+              <li>
+                <span class="rule-icon">⚙️</span>
+                <span class="rule-text">点击右上角设置图标（或右键点击同步按钮）即可配置 API 参数。</span>
+              </li>
+              <li>
+                <span class="rule-icon">🛡️</span>
+                <span class="rule-text">默认会使用 <strong>LM Studio</strong> 本地启动，请务必在 Server 设置中打开 <strong>CORS 跨域</strong>。</span>
+              </li>
+              <li>
+                <span class="rule-icon">🌐</span>
+                <span class="rule-text">默认本地已填写LM Studio的API，云端 API 只要符合 <strong>OpenAI 规格</strong>均可直接填入使用。</span>
+              </li>
+            </ul>
+
+            <div class="tip mini">提示：本工具完全不联网，您的设置信息将自动保存在您本地浏览器中，无需担心安全和重复填写。</div>
+          </div>
+    
+          <div class="modal-actions">
+            <button class="btn" type="button" @click="showWelcomeModal = false">开始创作</button>
+          </div>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
+/* Modal Transition - Scoped Blurred Left Slide-in */
+.modal-enter-active {
+  transition: opacity 0.3s ease;
+}
+
+.modal-leave-active {
+  transition: opacity 0.3s ease-out !important;
+}
+
+.modal-enter-active .modal {
+  /* 速度加快：0.4s */
+  animation: slide-in-blurred-left 0.4s cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.modal-leave-active .modal {
+  /* 极速退出：0.25s */
+  animation: slide-out-blurred-left 0.25s cubic-bezier(0.755, 0.05, 0.855, 0.06) both !important;
+}
+
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0 !important;
+}
+
+@keyframes slide-in-blurred-left {
+  0% {
+    /* 从左侧 -1000px 划入，横向大幅度拉伸，极高模糊 */
+    transform: translateX(-1000px) scaleX(3) scaleY(0.2);
+    transform-origin: 0% 50%;
+    filter: blur(80px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0) scaleX(1) scaleY(1);
+    transform-origin: 50% 50%;
+    filter: blur(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-out-blurred-left {
+  0% {
+    transform: translateX(0) scaleX(1) scaleY(1);
+    transform-origin: 50% 50%;
+    filter: blur(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(-1000px) scaleX(3) scaleY(0.2);
+    transform-origin: 0% 50%;
+    filter: blur(80px);
+    opacity: 0;
+  }
+}
+
 /* Topbar Styles */
 .topbar-root {
   width: 100%;
@@ -410,4 +507,54 @@ const openApiModal = (tab: 'local' | 'cloud') => {
   border: 1px solid var(--glass-border-light);
   transition: background-color var(--theme-ease), border-color var(--theme-ease), color var(--theme-ease);
 }
+
+/* Welcome Card Specific Styles */
+.welcome-card {
+  max-width: 480px;
+}
+
+.welcome-intro {
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.rule-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rule-list li {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  background: var(--ui-control-bg-soft);
+  border-radius: 12px;
+  border: 1px solid var(--glass-border-light);
+  line-height: 1.5;
+}
+
+.rule-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.rule-text {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.rule-text strong {
+  color: var(--primary);
+}
+
+.tip.mini {
+  margin-top: 4px;
+  opacity: 0.7;
+}
+
 </style>
