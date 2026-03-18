@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { 
-  Settings, 
   Sparkles,
   Tags,
   FileText,
