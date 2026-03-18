@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { 
   Settings, 
-  User, 
-  Shirt, 
-  Image as ImageIcon, 
+  Sparkles,
+  Tags,
+  FileText,
   Bot,
   Send,
   Trash2,
@@ -972,7 +972,7 @@ const generateTags = async () => {
         <div class="header">
           <div class="title-row">
             <div class="title-with-icon">
-              <Shirt :size="20" color="var(--primary)" />
+              <Tags :size="20" color="var(--primary)" />
               <h2>Tag 视图</h2>
             </div>
             <div class="tag-count-badge" v-if="parsedTags.length > 0">
@@ -986,19 +986,19 @@ const generateTags = async () => {
         <div class="content-scroll">
           <template v-if="activeNodeIds.length === 0">
             <div class="tag-empty-state">
-              <Shirt :size="36" class="empty-icon" />
+              <Tags :size="36" class="empty-icon" />
               <span>请在画布上选择一张图片</span>
             </div>
           </template>
           <template v-else-if="activeNodeIds.length > 1">
             <div class="tag-empty-state">
-              <Shirt :size="36" class="empty-icon" />
+              <Tags :size="36" class="empty-icon" />
               <span>已选中 <strong style="color: var(--primary);">{{ activeNodeIds.length }}</strong> 张图片</span>
             </div>
           </template>
           <template v-else-if="parsedTags.length === 0">
             <div class="tag-empty-state">
-              <Shirt :size="36" class="empty-icon" />
+              <Tags :size="36" class="empty-icon" />
               <span>暂无打标内容</span>
             </div>
           </template>
@@ -1037,7 +1037,7 @@ const generateTags = async () => {
         <div class="header">
           <div class="title-row">
             <div class="title-with-icon">
-              <ImageIcon :size="20" color="var(--primary)" />
+              <FileText :size="20" color="var(--primary)" />
               <h2>图片信息</h2>
             </div>
             <div class="tag-count-badge" v-if="imageMeta">
@@ -1057,19 +1057,19 @@ const generateTags = async () => {
 
           <!-- No image selected -->
           <div v-else-if="activeNodeIds.length === 0" class="tag-empty-state">
-            <ImageIcon :size="36" class="empty-icon" />
+            <FileText :size="36" class="empty-icon" />
             <span>请在画布上选择一张图片</span>
           </div>
 
           <!-- Multi-select -->
           <div v-else-if="activeNodeIds.length > 1" class="tag-empty-state">
-            <ImageIcon :size="36" class="empty-icon" />
+            <FileText :size="36" class="empty-icon" />
             <span>已选中 <strong style="color: var(--primary);">{{ activeNodeIds.length }}</strong> 张图片</span>
           </div>
 
           <!-- Error -->
           <div v-else-if="metaError" class="tag-empty-state">
-            <ImageIcon :size="36" class="empty-icon" />
+            <FileText :size="36" class="empty-icon" />
             <span class="meta-error">{{ metaError }}</span>
           </div>
 
@@ -1238,7 +1238,7 @@ const generateTags = async () => {
       <div class="header">
           <div class="title-row">
             <div class="title-with-icon">
-              <Settings :size="20" color="var(--primary)" />
+              <Sparkles :size="20" color="var(--primary)" />
               <h2>打标设置</h2>
             </div>
           </div>
@@ -1401,14 +1401,32 @@ const generateTags = async () => {
 
     <!-- Floating Tools Toolbar -->
     <div class="floating-tools">
-      <button class="tool-btn glass-card" :class="{ active: activeTool === 0 }" @click="activeTool = 0" title="设置">
-        <User :size="18" />
+      <button
+        class="tool-btn glass-card"
+        :class="{ active: activeTool === 0 }"
+        @click="activeTool = 0"
+        title="反推提示词打标：生成/配置打标参数"
+        aria-label="反推提示词打标：生成/配置打标参数"
+      >
+        <Sparkles :size="18" />
       </button>
-      <button class="tool-btn glass-card" :class="{ active: activeTool === 1 }" @click="activeTool = 1" title="Tag 视图">
-        <Shirt :size="18" />
+      <button
+        class="tool-btn glass-card"
+        :class="{ active: activeTool === 1 }"
+        @click="activeTool = 1"
+        title="图片 Tag：查看/编辑当前图片的 tags"
+        aria-label="图片 Tag：查看/编辑当前图片的 tags"
+      >
+        <Tags :size="18" />
       </button>
-      <button class="tool-btn glass-card" :class="{ active: activeTool === 2 }" @click="activeTool = 2" title="图片">
-        <ImageIcon :size="18" />
+      <button
+        class="tool-btn glass-card"
+        :class="{ active: activeTool === 2 }"
+        @click="activeTool = 2"
+        title="图片元数据：解析 PNG 内嵌参数/工作流"
+        aria-label="图片元数据：解析 PNG 内嵌参数/工作流"
+      >
+        <FileText :size="18" />
       </button>
       <button class="tool-btn glass-card" :class="{ active: activeTool === 3 }" @click="activeTool = 3" title="对话">
         <Bot :size="18" />
