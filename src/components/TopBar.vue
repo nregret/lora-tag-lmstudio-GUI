@@ -1,7 +1,7 @@
 <script setup lang="ts">
 defineOptions({ inheritAttrs: false })
 
-import { Hexagon, Cloud, Moon, Sun, Settings, HelpCircle, X } from 'lucide-vue-next'
+import { Cloud, Moon, Sun, Settings, HelpCircle, X } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import {
   isLocalApi,
@@ -33,11 +33,8 @@ const openApiModal = (tab: 'local' | 'cloud') => {
   <div class="topbar-root" v-bind="$attrs">
     <header class="topbar glass-bar">
       <!-- Left: Logo -->
-      <div class="logo">
-        <div class="logo-icon">
-          <Hexagon :size="20" color="var(--primary)" />
-        </div>
-        <span class="logo-text">TagMaster Pro</span>
+      <div class="logo" title="nnegret.com">
+        <img src="../assets/nnegret_logo_title.svg" class="main-logo" alt="nnegret logo" />
       </div>
   
       <!-- Center: Navigation -->
@@ -144,11 +141,11 @@ const openApiModal = (tab: 'local' | 'cloud') => {
     <Transition name="modal" type="animation" :duration="{ enter: 400, leave: 300 }">
       <div v-if="showWelcomeModal" class="modal-mask" @mousedown.self="showWelcomeModal = false">
         <div class="modal glass-card welcome-card">
-          <div class="modal-header">
-            <div class="modal-title">🚀 欢迎使用 TagMaster Pro</div>
-            <button class="icon-btn glass-card" type="button" title="关闭" @click="showWelcomeModal = false">
-              <X :size="16" />
-            </button>
+          <div class="modal-header welcome-header">
+            <div class="welcome-logo-wrapper">
+              <img src="../assets/nnegret_logo_title.svg" class="main-logo welcome-logo" alt="nnegret logo" />
+              <div class="q-group">Q 群：173273201</div>
+            </div>
           </div>
     
           <div class="modal-body welcome-body">
@@ -171,7 +168,10 @@ const openApiModal = (tab: 'local' | 'cloud') => {
 
             <div class="tip mini">提示：本工具完全不联网，您的设置信息将自动保存在您本地浏览器中，无需担心安全和重复填写。</div>
           </div>
-  
+          <!-- Action at the bottom -->
+          <div class="modal-actions">
+            <button class="btn welcome-btn" type="button" @click="showWelcomeModal = false">开始使用</button>
+          </div>
         </div>
       </div>
     </Transition>
@@ -270,30 +270,29 @@ const openApiModal = (tab: 'local' | 'cloud') => {
   transition: width 0.18s ease;
 }
 
+.main-logo {
+  height: 64px;
+  width: auto;
+  transition: filter var(--theme-ease);
+  /* Optional: if logo is black, invert in dark mode */
+}
+
+/* Theme adaptation for SVG logo */
+:root.theme-dark .main-logo {
+  filter: invert(1) brightness(1.2) contrast(1.1);
+}
+
 .logo {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.logo-icon {
-  width: 32px;
-  height: 32px;
-  background: var(--ui-solid-bg);
+  cursor: pointer;
+  padding: 4px 8px;
   border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: var(--glass-shadow-sm);
-  border: 1px solid var(--glass-border-light);
-  transition: background-color var(--theme-ease), border-color var(--theme-ease), box-shadow var(--theme-ease);
+  transition: all 0.2s ease;
 }
 
-.logo-text {
-  font-weight: 800;
-  font-size: 17px;
-  letter-spacing: -0.5px;
-  color: var(--text-main);
+.logo:hover {
+  background: var(--ui-hover-bg);
 }
 
 .nav-links {
@@ -508,6 +507,39 @@ const openApiModal = (tab: 'local' | 'cloud') => {
 /* Welcome Card Specific Styles */
 .welcome-card {
   max-width: 480px;
+  text-align: center;
+}
+
+.welcome-header {
+  flex-direction: column;
+  justify-content: center;
+  padding: 10px 0 10px 0;
+}
+
+.welcome-logo-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.welcome-logo {
+  height: 90px !important; /* Larger logo for welcome card */
+}
+
+.q-group {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--primary);
+  letter-spacing: 0.5px;
+}
+
+.welcome-btn {
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px;
+  font-size: 14px;
+  letter-spacing: 1px;
 }
 
 .welcome-intro {
