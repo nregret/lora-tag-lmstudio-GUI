@@ -2,7 +2,7 @@
 defineOptions({ inheritAttrs: false })
 
 import { Cloud, Moon, Sun, Settings, HelpCircle, X } from 'lucide-vue-next'
-import { computed, ref } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import {
   isLocalApi,
   isDarkMode,
@@ -17,7 +17,30 @@ import {
 
 const showApiModal = ref(false)
 const showWelcomeModal = ref(true)
-const activeApiTab = ref<'local' | 'cloud'>('local')
+const activeApiTab = ref<'local' | 'cloud' | 'sponsor'>('local')
+const bodyWrapperRef = ref<HTMLElement | null>(null)
+
+watch(activeApiTab, async (newVal, oldVal) => {
+  if (newVal === oldVal) return;
+  const wrapper = bodyWrapperRef.value;
+  if (!wrapper) return;
+
+  const startHeight = wrapper.offsetHeight;
+  wrapper.style.height = startHeight + 'px';
+
+  await nextTick();
+
+  const newContent = wrapper.querySelector('.modal-body:not(.tab-fade-leave-active)') as HTMLElement;
+  if (newContent) {
+    const targetHeight = newContent.offsetHeight;
+    void wrapper.offsetHeight;
+    wrapper.style.height = targetHeight + 'px';
+
+    setTimeout(() => {
+      wrapper.style.height = 'auto';
+    }, 300);
+  }
+});
 
 const syncLabel = computed(() => (isLocalApi.value ? '本地 API' : '云端 API'))
 const syncHint = computed(() => (isLocalApi.value ? '点击切换到云端 API' : '点击切换到本地 API'))
@@ -94,9 +117,14 @@ const openApiModal = (tab: 'local' | 'cloud') => {
             <button class="tab-btn" :class="{ active: activeApiTab === 'cloud' }" type="button" @click="activeApiTab = 'cloud'">
               云端
             </button>
+            <button class="tab-btn sponsor-btn" :class="{ active: activeApiTab === 'sponsor' }" type="button" @click="activeApiTab = 'sponsor'">
+              赞助
+            </button>
           </div>
     
-          <div class="modal-body" v-if="activeApiTab === 'local'">
+          <div class="modal-body-wrapper" ref="bodyWrapperRef">
+            <Transition name="tab-fade">
+              <div class="modal-body" v-if="activeApiTab === 'local'">
             <label class="field">
               <div class="label">Base URL</div>
               <input class="input" v-model="localApiBaseUrl" placeholder="http://127.0.0.1:1234/v1" />
@@ -112,7 +140,7 @@ const openApiModal = (tab: 'local' | 'cloud') => {
             <div class="tip">右键点击顶部“本地/云端”按钮可快速打开此窗口。</div>
           </div>
     
-          <div class="modal-body" v-else>
+          <div class="modal-body" v-else-if="activeApiTab === 'cloud'">
             <label class="field">
               <div class="label">Base URL</div>
               <input class="input" v-model="cloudApiBaseUrl" placeholder="https://api.openai.com/v1" />
@@ -125,6 +153,26 @@ const openApiModal = (tab: 'local' | 'cloud') => {
               <div class="label">API Key</div>
               <input class="input" type="password" autocomplete="off" v-model="cloudApiKey" placeholder="sk-..." />
             </label>
+          </div>
+
+          <div class="modal-body sponsor-body" v-else-if="activeApiTab === 'sponsor'">
+            <div class="sponsor-content">
+              <div class="sponsor-image-wrapper">
+                <img src="../assets/ZFB.jpg" alt="支付宝赞助" class="sponsor-image" />
+              </div>
+              <div class="sponsor-message">
+                <h4 class="sponsor-title">💖 感谢您的支持与鼓励！</h4>
+                <p class="sponsor-desc">
+                  您的每一次赞助都是我优化打磨这款工具的巨大动力。<br/>
+                  <strong>请务必在打赏时备注署名</strong>，我会在网页的赞助名单上特别向您答谢！
+                </p>
+                <div class="sponsor-contact">
+                  💌 有任何问题想询问，或有功能建议，直接联系群主即可，谢谢 🙏
+                </div>
+              </div>
+            </div>
+          </div>
+            </Transition>
           </div>
     
           <div class="modal-actions">
@@ -149,24 +197,35 @@ const openApiModal = (tab: 'local' | 'cloud') => {
           </div>
     
           <div class="modal-body welcome-body">
-            <p class="welcome-intro">在开始之前，请阅读以下使用细则：</p>
+            <p class="welcome-intro">欢迎！在使用前，您可以按需选择以下两种方式之一连接大模型：</p>
             
-            <ul class="rule-list">
-              <li>
-                <span class="rule-icon">⚙️</span>
-                <span class="rule-text">点击右上角设置图标（或右键点击同步按钮）即可配置 API 参数。</span>
-              </li>
-              <li>
-                <span class="rule-icon">🛡️</span>
-                <span class="rule-text">默认会使用 <strong>LM Studio</strong> 本地启动，请务必在 Server 设置中打开 <strong>CORS 跨域</strong>。</span>
-              </li>
-              <li>
-                <span class="rule-icon">🌐</span>
-                <span class="rule-text">默认本地已填写LM Studio的API，云端 API 只要符合 <strong>OpenAI 规格</strong>均可直接填入使用。</span>
-              </li>
-            </ul>
+            <div class="instruction-blocks">
+              <div class="instruction-block">
+                <div class="block-header">
+                  <span class="block-icon">💻</span>
+                  <span class="block-title">方式一：本地运行大模型（推荐）</span>
+                </div>
+                <ul class="block-steps">
+                  <li>1. 打开并运行 <strong>LM Studio</strong> 客户端。</li>
+                  <li>2. 搜索并 <strong>加载</strong> 您想要使用的模型。</li>
+                  <li>3. 开启 <strong>Local Server</strong> 服务，并务必在右侧设置中开启 <strong>CORS （跨域）</strong>。</li>
+                </ul>
+              </div>
 
-            <div class="tip mini">提示：本工具完全不联网，您的设置信息将自动保存在您本地浏览器中，无需担心安全和重复填写。</div>
+              <div class="instruction-block">
+                <div class="block-header">
+                  <span class="block-icon">☁️</span>
+                  <span class="block-title">方式二：使用云端 API</span>
+                </div>
+                <ul class="block-steps">
+                  <li>1. 点击右上角 <strong>齿轮图标</strong>（或右键顶部同步按钮）打开设置。</li>
+                  <li>2. 将选项卡切换至 <strong>云端</strong>。</li>
+                  <li>3. 填入符合 <strong>OpenAI 格式</strong> 的接口地址 (Base URL) 与 API Key 即可。</li>
+                </ul>
+              </div>
+            </div>
+
+            <div class="tip mini">🎯 提示：本工具完全不联网，您的设置信息将安全且自动保存在浏览器本地。</div>
           </div>
         </div>
       </div>
@@ -432,11 +491,109 @@ const openApiModal = (tab: 'local' | 'cloud') => {
   background: rgba(46, 182, 255, 0.10);
 }
 
-.modal-body {
+.tab-btn.sponsor-btn.active {
+  color: #ff7bac; /* 马卡龙粉 */
+  border-color: rgba(255, 123, 172, 0.35);
+  background: rgba(255, 123, 172, 0.12);
+}
+
+.modal-body-wrapper {
+  position: relative;
+  transition: height 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  overflow: hidden;
   margin-top: 14px;
+}
+
+.tab-fade-enter-active,
+.tab-fade-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.tab-fade-leave-active {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.tab-fade-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.tab-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+.modal-body {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.sponsor-content {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 8px 4px 4px 4px;
+}
+
+.sponsor-image-wrapper {
+  flex-shrink: 0;
+  width: 140px;
+  height: 140px;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--glass-border-light);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  background: white; /* 确保暗色模式下二维码反向对比度依然清晰 */
+  padding: 6px;
+}
+
+.sponsor-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 8px;
+}
+
+.sponsor-message {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sponsor-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--primary);
+  letter-spacing: 0.5px;
+}
+
+.sponsor-desc {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-main);
+}
+
+.sponsor-desc strong {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.sponsor-contact {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  background: var(--ui-control-bg-soft);
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px dashed rgba(46, 182, 255, 0.3);
 }
 
 .field .label {
@@ -539,41 +696,62 @@ const openApiModal = (tab: 'local' | 'cloud') => {
   margin-bottom: 8px;
 }
 
-.rule-list {
-  list-style: none;
-  padding: 0;
+.instruction-blocks {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  text-align: left;
 }
 
-.rule-list li {
-  display: flex;
-  gap: 12px;
-  padding: 12px;
+.instruction-block {
   background: var(--ui-control-bg-soft);
-  border-radius: 12px;
   border: 1px solid var(--glass-border-light);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.block-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.block-icon {
+  font-size: 15px;
+}
+
+.block-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--primary);
+  letter-spacing: 0.5px;
+}
+
+.block-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.block-steps li {
+  font-size: 11.5px;
+  color: var(--text-muted);
   line-height: 1.5;
 }
 
-.rule-icon {
-  font-size: 18px;
-  flex-shrink: 0;
-}
-
-.rule-text {
-  font-size: 11.5px;
-  color: var(--text-muted);
-}
-
-.rule-text strong {
-  color: var(--primary);
+.block-steps strong {
+  color: var(--text-main);
+  font-weight: 700;
 }
 
 .tip.mini {
-  margin-top: 4px;
-  opacity: 0.7;
+  margin-top: 10px;
+  opacity: 0.8;
+  text-align: center;
 }
 
 </style>
