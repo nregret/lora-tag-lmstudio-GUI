@@ -168,10 +168,6 @@ const openApiModal = (tab: 'local' | 'cloud') => {
 
             <div class="tip mini">提示：本工具完全不联网，您的设置信息将自动保存在您本地浏览器中，无需担心安全和重复填写。</div>
           </div>
-          <!-- Action at the bottom -->
-          <div class="modal-actions">
-            <button class="btn welcome-btn" type="button" @click="showWelcomeModal = false">开始使用</button>
-          </div>
         </div>
       </div>
     </Transition>
@@ -285,14 +281,8 @@ const openApiModal = (tab: 'local' | 'cloud') => {
 .logo {
   display: flex;
   align-items: center;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 8px;
-  transition: all 0.2s ease;
-}
-
-.logo:hover {
-  background: var(--ui-hover-bg);
+  cursor: default;
+  padding: 4px 0;
 }
 
 .nav-links {
