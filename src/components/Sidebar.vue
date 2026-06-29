@@ -12,7 +12,7 @@ import {
   Download,
   X
 } from 'lucide-vue-next'
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import {
   activeNodeIds,
@@ -21,7 +21,9 @@ import {
   batchInsertWord,
   isLocalApi,
   isGeneratingTags,
+  defaultSystemTagPrompt,
   generateTagsForActiveNodes,
+  generateTagsForActiveNodesWithSystemPrompt,
   nodes,
   currentDirectoryHandle,
   buildAuthHeaders,
@@ -877,6 +879,22 @@ watch([mentionOpen, mentionActiveIndex], async ([open]) => {
 const tagType = ref('tag') 
 const tagLength = ref('moderate') 
 
+const customSystemPrompt = ref(defaultSystemTagPrompt)
+try {
+  const savedPrompt = localStorage.getItem('loraTag.customSystemPrompt')
+  if (savedPrompt && savedPrompt.trim()) customSystemPrompt.value = savedPrompt
+} catch {}
+
+watch(customSystemPrompt, (val) => {
+  try {
+    localStorage.setItem('loraTag.customSystemPrompt', val)
+  } catch {}
+})
+
+const resetCustomSystemPrompt = () => {
+  customSystemPrompt.value = defaultSystemTagPrompt
+}
+
 // --- Fixed Word Insertion State ---
 const insertWord = ref('')
 const insertPos = ref('start')
@@ -899,9 +917,6 @@ const handleIndexClick = () => {
 }
 
 const isInsertSuccess = ref(false)
-
-// Global click outside to close popover
-import { onMounted, onUnmounted } from 'vue'
 
 const closePopover = (e: MouseEvent) => {
   const target = e.target as HTMLElement
@@ -959,6 +974,18 @@ const generateTags = async () => {
   }
   const selectedProps = propertyTags.value.filter(p => p.selected).map(p => p.name)
   await generateTagsForActiveNodes(tagType.value, tagLength.value, selectedProps)
+}
+
+const generateTagsWithCustomSystemPrompt = async () => {
+  if (activeNodeIds.value.length === 0) {
+    alert("请在画布上先选择至少一张图片！")
+    return
+  }
+  if (!customSystemPrompt.value.trim()) {
+    alert("请先填写系统提示词")
+    return
+  }
+  await generateTagsForActiveNodesWithSystemPrompt(customSystemPrompt.value)
 }
 </script>
 
@@ -1231,6 +1258,73 @@ const generateTags = async () => {
         </div>
       </template>
 
+      <!-- ============ SYSTEM PROMPT TAGGING PANEL ============ -->
+      <template v-else-if="activeTool === 4">
+        <div class="header">
+          <div class="title-row">
+            <div class="title-with-icon">
+              <Wand2 :size="20" color="var(--primary)" />
+              <h2>系统提示词</h2>
+            </div>
+            <button class="prompt-reset-btn glass-card" type="button" @click="resetCustomSystemPrompt">
+              恢复默认
+            </button>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="content-scroll system-prompt-scroll">
+          <div class="section system-prompt-section">
+            <div class="section-header">
+              <h3>提示词内容</h3>
+            </div>
+            <div class="textarea-wrapper glass-inset system-prompt-wrapper">
+              <textarea
+                class="system-prompt-textarea"
+                v-model="customSystemPrompt"
+                placeholder="写入用于反推所选图片 tags 的系统提示词..."
+              ></textarea>
+            </div>
+          </div>
+
+          <div class="divider subtle"></div>
+
+          <!-- Tagging Content -->
+          <div class="section">
+            <div class="section-header">
+              <h3>打标内容</h3>
+            </div>
+            <div class="textarea-wrapper glass-inset" :class="{ 'is-disabled': isMultiSelect }">
+              <template v-if="isMultiSelect">
+                <div class="multi-select-message">
+                  <span class="count">{{ activeNodeIds.length }}</span>
+                  <span class="text">张图片已选择</span>
+                </div>
+              </template>
+              <template v-else>
+                <textarea
+                  v-model="activeNodeTagContent"
+                  @input="handleInput"
+                  placeholder="将在此显示生成的打标内容..."></textarea>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions-area">
+          <button
+            class="btn-primary"
+            :disabled="activeNodeIds.length === 0 || isGeneratingTags || !customSystemPrompt.trim()"
+            @click="generateTagsWithCustomSystemPrompt"
+          >
+            <Wand2 v-if="!isGeneratingTags" :size="16" />
+            <span v-if="isGeneratingTags" class="loading-spinner"></span>
+            {{ isGeneratingTags ? '生成中...' : '生成打标tag' }}
+          </button>
+        </div>
+      </template>
+
       <!-- ============ DEFAULT SETTINGS PANEL ============ -->
       <template v-else>
       <!-- Header -->
@@ -1429,6 +1523,15 @@ const generateTags = async () => {
       </button>
       <button class="tool-btn glass-card" :class="{ active: activeTool === 3 }" @click="activeTool = 3" title="对话">
         <Bot :size="18" />
+      </button>
+      <button
+        class="tool-btn glass-card"
+        :class="{ active: activeTool === 4 }"
+        @click="activeTool = 4"
+        title="系统提示词打标：仅使用自定义系统提示词反推 tags"
+        aria-label="系统提示词打标：仅使用自定义系统提示词反推 tags"
+      >
+        <Wand2 :size="18" />
       </button>
 
       <div class="spacer"></div>
@@ -1647,6 +1750,41 @@ textarea:focus {
 
 textarea::placeholder {
   color: var(--text-light);
+}
+
+.system-prompt-scroll {
+  display: flex;
+  flex-direction: column;
+}
+
+.system-prompt-section {
+  min-height: 0;
+}
+
+.system-prompt-wrapper {
+  height: 500px;
+  min-height: 420px;
+  padding: 14px;
+}
+
+.system-prompt-textarea {
+  height: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.prompt-reset-btn {
+  padding: 6px 10px;
+  border-radius: 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.prompt-reset-btn:hover {
+  color: var(--primary);
 }
 
 .is-disabled {

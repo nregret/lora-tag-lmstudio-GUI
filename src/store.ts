@@ -2,6 +2,12 @@ import { ref, watch } from 'vue'
 import systemPromptTemplate from './assets/systemprompt.txt?raw'
 import { blobToDataUrlScaled } from './utils/image'
 
+export const defaultSystemTagPrompt = `${systemPromptTemplate}
+
+【用户动态要求】
+- 格式要求：生成英文 tag 或短语，以英文逗号分隔，无换行。
+- 内容要求：基于图片可见内容进行反推打标，只输出最终 tag 文本，不要解释、标题或 Markdown。`
+
 export interface NodeData {
   id: number
   title: string
@@ -228,14 +234,28 @@ export const batchInsertWord = async (word: string, pos: 'start' | 'end' | 'inde
   }
 }
 
-// Generate tags for selected nodes using Local or Cloud API
-export const generateTagsForActiveNodes = async (
-  tagType: string, 
-  tagLength: string, 
-  selectedProps: string[]
-) => {
+type TagGenerationOptions = {
+  tagType?: string
+  selectedProps?: string[]
+  useModelDefaults?: boolean
+  imageOnlyUserMessage?: boolean
+}
+
+async function generateTagsFromSystemPrompt(
+  finalPrompt: string,
+  options: TagGenerationOptions = {}
+) {
   if (activeNodeIds.value.length === 0 || !currentDirectoryHandle.value) return
-  
+
+  const prompt = finalPrompt.trim()
+  if (!prompt) {
+    alert('请先填写系统提示词')
+    return
+  }
+
+  const selectedProps = options.selectedProps ?? []
+  const tagType = options.tagType ?? ''
+
   isGeneratingTags.value = true
   taggingProgress.value = 0
   try {
@@ -258,50 +278,41 @@ export const generateTagsForActiveNodes = async (
       const base64data = await blobToDataUrlScaled(blob, { maxSide: 768, mime: 'image/jpeg', quality: 0.85 })
       setProgress(0.25)
 
-      // Construct Prompt Additions
-      let customInstructions = `\n\n【用户动态要求】\n`
-      if (tagType === 'tag') {
-        customInstructions += `- 格式要求：生成的都是词语，以英文逗号分隔，无换行。\n`
-      } else if (tagType === 'tag+phrase') {
-        customInstructions += `- 格式要求：以英文逗号分隔的标签和短语混合，无换行。\n`
-      } else if (tagType === 'natural') {
-        customInstructions += `- 格式要求：纯自然语言描述段落（如一两句话），不使用纯逗号分隔的孤立标签。\n`
-      }
-
-      const lengthMap: Record<string, string> = {
-        'minimal': '极简（尽量少于10个词或极短的短语）',
-        'moderate': '适中（15-30个词/短语）',
-        'detailed': '详细（尽可能多地描述画面细节，30个词以上）'
-      }
-      customInstructions += `- 长度要求：代表总打标反推出来的长度为【${lengthMap[tagLength] || '适中'}】。\n`
-
-      if (selectedProps.length > 0) {
-        customInstructions += `- 内容范围限定：你只需要反推和打标以下被勾选的图片属性分类：【${selectedProps.join('、')}】。图片中即使有其他特征，如果没有提及在这几个分类中，请绝对不要输出相关的标签。\n`
-      }
-
-      const finalPrompt = systemPromptTemplate + customInstructions
-
       // API Call (OpenAI-compatible)
       const baseUrl = getActiveApiBaseUrl()
       const model = getActiveApiModel()
       if (!baseUrl) throw new Error('未配置 API Base URL')
-      if (!model) throw new Error('未配置 Model')
+      if (!options.useModelDefaults && !model) throw new Error('未配置 Model')
       const apiUrl = getChatCompletionsUrl()
       
-      const apiPayload = {
-        model,
+      const userContent = options.imageOnlyUserMessage
+        ? [
+            { type: "image_url", image_url: { url: base64data } }
+          ]
+        : [
+            { type: "text", text: "请根据系统提示词和图片进行打标：" },
+            { type: "image_url", image_url: { url: base64data } }
+          ]
+
+      const apiPayload: {
+        model?: string
+        messages: any[]
+        temperature?: number
+        max_tokens?: number
+      } = {
         messages: [
-          { role: "system", content: finalPrompt },
+          { role: "system", content: prompt },
           { 
             role: "user", 
-            content: [
-              { type: "text", text: "请根据系统提示词和图片进行打标：" },
-              { type: "image_url", image_url: { url: base64data } }
-            ] 
+            content: userContent
           }
-        ],
-        temperature: 0.7,
-        max_tokens: 500
+        ]
+      }
+
+      if (!options.useModelDefaults) {
+        apiPayload.model = model
+        apiPayload.temperature = 0.7
+        apiPayload.max_tokens = 500
       }
 
       const reqHeaders = buildAuthHeaders()
@@ -374,6 +385,42 @@ export const generateTagsForActiveNodes = async (
       if (!isGeneratingTags.value) taggingProgress.value = 0
     }, 800)
   }
+}
+
+// Generate tags for selected nodes using Local or Cloud API
+export const generateTagsForActiveNodes = async (
+  tagType: string,
+  tagLength: string,
+  selectedProps: string[]
+) => {
+  let customInstructions = `\n\n【用户动态要求】\n`
+  if (tagType === 'tag') {
+    customInstructions += `- 格式要求：生成的都是词语，以英文逗号分隔，无换行。\n`
+  } else if (tagType === 'tag+phrase') {
+    customInstructions += `- 格式要求：以英文逗号分隔的标签和短语混合，无换行。\n`
+  } else if (tagType === 'natural') {
+    customInstructions += `- 格式要求：纯自然语言描述段落（如一两句话），不使用纯逗号分隔的孤立标签。\n`
+  }
+
+  const lengthMap: Record<string, string> = {
+    'minimal': '极简（尽量少于10个词或极短的短语）',
+    'moderate': '适中（15-30个词/短语）',
+    'detailed': '详细（尽可能多地描述画面细节，30个词以上）'
+  }
+  customInstructions += `- 长度要求：代表总打标反推出来的长度为【${lengthMap[tagLength] || '适中'}】。\n`
+
+  if (selectedProps.length > 0) {
+    customInstructions += `- 内容范围限定：你只需要反推和打标以下被勾选的图片属性分类：【${selectedProps.join('、')}】。图片中即使有其他特征，如果没有提及在这几个分类中，请绝对不要输出相关的标签。\n`
+  }
+
+  await generateTagsFromSystemPrompt(systemPromptTemplate + customInstructions, { tagType, selectedProps })
+}
+
+export const generateTagsForActiveNodesWithSystemPrompt = async (systemPrompt: string) => {
+  await generateTagsFromSystemPrompt(systemPrompt, {
+    useModelDefaults: true,
+    imageOnlyUserMessage: true
+  })
 }
 
 type PropertyName =
