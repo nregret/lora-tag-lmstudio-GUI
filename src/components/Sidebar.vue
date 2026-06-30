@@ -4,6 +4,7 @@ import {
   Tags,
   FileText,
   Bot,
+  ListFilter,
   Send,
   Trash2,
   Plus,
@@ -22,8 +23,10 @@ import {
   isLocalApi,
   isGeneratingTags,
   defaultSystemTagPrompt,
+  defaultSystemTagOptimizePrompt,
   generateTagsForActiveNodes,
   generateTagsForActiveNodesWithSystemPrompt,
+  optimizeTagsForActiveNodesWithSystemPrompt,
   nodes,
   currentDirectoryHandle,
   buildAuthHeaders,
@@ -895,6 +898,22 @@ const resetCustomSystemPrompt = () => {
   customSystemPrompt.value = defaultSystemTagPrompt
 }
 
+const optimizeSystemPrompt = ref(defaultSystemTagOptimizePrompt)
+try {
+  const savedPrompt = localStorage.getItem('loraTag.optimizeSystemPrompt')
+  if (savedPrompt && savedPrompt.trim()) optimizeSystemPrompt.value = savedPrompt
+} catch {}
+
+watch(optimizeSystemPrompt, (val) => {
+  try {
+    localStorage.setItem('loraTag.optimizeSystemPrompt', val)
+  } catch {}
+})
+
+const resetOptimizeSystemPrompt = () => {
+  optimizeSystemPrompt.value = defaultSystemTagOptimizePrompt
+}
+
 // --- Fixed Word Insertion State ---
 const insertWord = ref('')
 const insertPos = ref('start')
@@ -986,6 +1005,18 @@ const generateTagsWithCustomSystemPrompt = async () => {
     return
   }
   await generateTagsForActiveNodesWithSystemPrompt(customSystemPrompt.value)
+}
+
+const optimizeTagsWithSystemPrompt = async () => {
+  if (activeNodeIds.value.length === 0) {
+    alert("请在画布上先选择至少一张图片！")
+    return
+  }
+  if (!optimizeSystemPrompt.value.trim()) {
+    alert("请先填写系统提示词")
+    return
+  }
+  await optimizeTagsForActiveNodesWithSystemPrompt(optimizeSystemPrompt.value)
 }
 </script>
 
@@ -1325,6 +1356,73 @@ const generateTagsWithCustomSystemPrompt = async () => {
         </div>
       </template>
 
+      <!-- ============ SYSTEM PROMPT TAG OPTIMIZATION PANEL ============ -->
+      <template v-else-if="activeTool === 5">
+        <div class="header">
+          <div class="title-row">
+            <div class="title-with-icon">
+              <ListFilter :size="20" color="var(--primary)" />
+              <h2>优化打标</h2>
+            </div>
+            <button class="prompt-reset-btn glass-card" type="button" @click="resetOptimizeSystemPrompt">
+              恢复默认
+            </button>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="content-scroll system-prompt-scroll">
+          <div class="section system-prompt-section">
+            <div class="section-header">
+              <h3>提示词内容</h3>
+            </div>
+            <div class="textarea-wrapper glass-inset system-prompt-wrapper">
+              <textarea
+                class="system-prompt-textarea"
+                v-model="optimizeSystemPrompt"
+                placeholder="写入用于优化现有打标内容的系统提示词..."
+              ></textarea>
+            </div>
+          </div>
+
+          <div class="divider subtle"></div>
+
+          <!-- Tagging Content -->
+          <div class="section">
+            <div class="section-header">
+              <h3>打标内容</h3>
+            </div>
+            <div class="textarea-wrapper glass-inset" :class="{ 'is-disabled': isMultiSelect }">
+              <template v-if="isMultiSelect">
+                <div class="multi-select-message">
+                  <span class="count">{{ activeNodeIds.length }}</span>
+                  <span class="text">张图片已选择</span>
+                </div>
+              </template>
+              <template v-else>
+                <textarea
+                  v-model="activeNodeTagContent"
+                  @input="handleInput"
+                  placeholder="将在此显示生成的打标内容..."></textarea>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <div class="actions-area">
+          <button
+            class="btn-primary"
+            :disabled="activeNodeIds.length === 0 || isGeneratingTags || !optimizeSystemPrompt.trim()"
+            @click="optimizeTagsWithSystemPrompt"
+          >
+            <ListFilter v-if="!isGeneratingTags" :size="16" />
+            <span v-if="isGeneratingTags" class="loading-spinner"></span>
+            {{ isGeneratingTags ? '优化中...' : '优化打标tag' }}
+          </button>
+        </div>
+      </template>
+
       <!-- ============ DEFAULT SETTINGS PANEL ============ -->
       <template v-else>
       <!-- Header -->
@@ -1532,6 +1630,15 @@ const generateTagsWithCustomSystemPrompt = async () => {
         aria-label="系统提示词打标：仅使用自定义系统提示词反推 tags"
       >
         <Wand2 :size="18" />
+      </button>
+      <button
+        class="tool-btn glass-card"
+        :class="{ active: activeTool === 5 }"
+        @click="activeTool = 5"
+        title="系统提示词优化打标：优化当前 txt 内容"
+        aria-label="系统提示词优化打标：优化当前 txt 内容"
+      >
+        <ListFilter :size="18" />
       </button>
 
       <div class="spacer"></div>

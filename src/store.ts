@@ -8,6 +8,14 @@ export const defaultSystemTagPrompt = `${systemPromptTemplate}
 - 格式要求：生成英文 tag 或短语，以英文逗号分隔，无换行。
 - 内容要求：基于图片可见内容进行反推打标，只输出最终 tag 文本，不要解释、标题或 Markdown。`
 
+export const defaultSystemTagOptimizePrompt = `你是专业的图片打标文本优化助手。
+用户会提供某张图片当前已经生成好的打标文本。请严格根据用户的系统提示词要求，对这段打标文本进行整理、筛选、改写或格式转换。
+
+要求：
+- 只基于用户提供的现有打标文本进行优化，不要凭空添加无法从文本判断的新信息。
+- 只输出优化后的最终打标内容，不要解释、不要标题、不要 Markdown。
+- 如果用户要求保留某一类内容，例如只保留服饰、只保留背景、改成一段自然语言，请严格执行。`
+
 export interface NodeData {
   id: number
   title: string
@@ -421,6 +429,100 @@ export const generateTagsForActiveNodesWithSystemPrompt = async (systemPrompt: s
     useModelDefaults: true,
     imageOnlyUserMessage: true
   })
+}
+
+export const optimizeTagsForActiveNodesWithSystemPrompt = async (systemPrompt: string) => {
+  if (activeNodeIds.value.length === 0 || !currentDirectoryHandle.value) return
+
+  const prompt = systemPrompt.trim()
+  if (!prompt) {
+    alert('请先填写系统提示词')
+    return
+  }
+
+  isGeneratingTags.value = true
+  taggingProgress.value = 0
+  try {
+    const baseUrl = getActiveApiBaseUrl()
+    if (!baseUrl) throw new Error('未配置 API Base URL')
+    const apiUrl = getChatCompletionsUrl()
+    const total = activeNodeIds.value.length
+    let completed = 0
+
+    for (const nodeId of activeNodeIds.value) {
+      const node = nodes.value.find(n => n.id === nodeId)
+      if (!node) continue
+
+      const txtFileName = node.baseName + '.txt'
+      const fileHandle = await currentDirectoryHandle.value.getFileHandle(txtFileName, { create: true })
+      const file = await fileHandle.getFile()
+      const currentText = (await file.text()).trim()
+      if (!currentText) {
+        throw new Error(`${txtFileName} 没有可优化的打标内容`)
+      }
+
+      const apiPayload = {
+        messages: [
+          { role: "system", content: prompt },
+          {
+            role: "user",
+            content: `当前打标内容：\n${currentText}`
+          }
+        ]
+      }
+
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: buildAuthHeaders(),
+        body: JSON.stringify(apiPayload)
+      })
+
+      if (!res.ok) {
+        let errBody = ''
+        try { errBody = await res.text() } catch {}
+        console.error('Tag optimization API error:', res.status, res.statusText, errBody)
+        throw new Error(`API 请求失败: ${res.status} ${res.statusText}${errBody ? `\n${errBody}` : ''}`)
+      }
+
+      const data = await res.json()
+      const choice0 = data?.choices?.[0]
+      const content = choice0?.message?.content
+      let optimizedText = ''
+      if (typeof content === 'string') optimizedText = content
+      else if (Array.isArray(content)) {
+        optimizedText = content
+          .map((b: any) => (typeof b?.text === 'string' ? b.text : typeof b?.content === 'string' ? b.content : ''))
+          .filter(Boolean)
+          .join('')
+      } else if (typeof choice0?.text === 'string') optimizedText = choice0.text
+      else if (typeof data?.output_text === 'string') optimizedText = data.output_text
+
+      optimizedText = String(optimizedText || '').trim()
+      if (!optimizedText) {
+        throw new Error('模型返回空内容（请检查本地模型是否可正常对话）')
+      }
+
+      const writable = await fileHandle.createWritable()
+      await writable.write(optimizedText)
+      await writable.close()
+
+      completed += 1
+      taggingProgress.value = Math.round((completed / total) * 100)
+
+      if (activeNodeIds.value.length === 1 && activeNodeIds.value[0] === nodeId) {
+        activeNodeTagContent.value = optimizedText
+      }
+    }
+  } catch (error) {
+    console.error("优化标签失败:", error)
+    alert("优化失败：" + ((error as Error).message || '未知错误'))
+  } finally {
+    isGeneratingTags.value = false
+    taggingProgress.value = 100
+    window.setTimeout(() => {
+      if (!isGeneratingTags.value) taggingProgress.value = 0
+    }, 800)
+  }
 }
 
 type PropertyName =
